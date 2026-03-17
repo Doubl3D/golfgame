@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "2D Golf Game"
+version = "1.0.0"
+id = "artifacts/golf-game"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+localPort = 22273
+name = "web"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/golf-game run dev"
+
+[services.env]
+PORT = "22273"
+BASE_PATH = "/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/golf-game", "run", "build"]
+publicDir = "artifacts/golf-game/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
