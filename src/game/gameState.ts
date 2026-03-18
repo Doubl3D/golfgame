@@ -59,6 +59,10 @@ export interface GameState {
   scorecardTimer: number;
   lastShotResult: string;
   selectedClubIndex: number;
+  // Multiplayer turn-alternating: per-player ball positions and stroke counts
+  playerBalls: (Ball | null)[];
+  playerStrokes: number[];
+  playerSunk: boolean[];
 }
 
 function randomWind(): Wind {
@@ -110,6 +114,9 @@ export function createInitialState(
     scorecardTimer: 0,
     lastShotResult: '',
     selectedClubIndex: 0,
+    playerBalls: playerNames.map(() => null),
+    playerStrokes: playerNames.map(() => 0),
+    playerSunk: playerNames.map(() => false),
   };
 }
 
@@ -118,9 +125,12 @@ export function startHole(state: GameState): GameState {
   const holeData = state.allHoleData[state.currentHole - 1] ?? generateHole(state.currentHole);
   const ball = createBall(holeData.teeX, holeData.teeY - 10);
   const suggested = suggestClub(holeData.distance);
+  // All players start at the tee
+  const playerBalls = state.players.map(() => createBall(holeData.teeX, holeData.teeY - 10));
   return {
     ...state,
     phase: 'holeIntro',
+    currentPlayerIdx: 0,
     holeData,
     ball,
     aimAngle: CLUBS[suggested].launchAngle,
@@ -133,6 +143,9 @@ export function startHole(state: GameState): GameState {
     particles: [],
     lastShotResult: '',
     selectedClubIndex: suggested,
+    playerBalls,
+    playerStrokes: state.players.map(() => 0),
+    playerSunk: state.players.map(() => false),
   };
 }
 

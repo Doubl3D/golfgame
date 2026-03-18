@@ -311,8 +311,9 @@ export function stepPhysics(
     .map((p, i, arr) => ({ ...p, alpha: (i / arr.length) * 0.6 }));
 
   const segment = getSegmentAt(segments, x);
+  // Use terrain ground level (not ball's airborne y) so water recovery places ball on ground
   const lastSafeX = segment.type !== 'water' ? x : ball.lastSafeX;
-  const lastSafeY = segment.type !== 'water' ? y : ball.lastSafeY;
+  const lastSafeY = segment.type !== 'water' ? getTerrainY(terrain, x) : ball.lastSafeY;
 
   return {
     ball: {

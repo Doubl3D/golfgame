@@ -81,7 +81,8 @@ export function drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, cam
   const treeBaseY = h * 0.80;
   const treeSpacing = 55;
   const treeCount = Math.ceil(w / treeSpacing) + 6;
-  const treeOffset = ((-tx2) % treeSpacing + treeSpacing) % treeSpacing;
+  // Use floor to prevent sub-pixel jitter during camera pans
+  const treeOffset = Math.floor(((-tx2) % treeSpacing + treeSpacing) % treeSpacing);
   for (let i = -3; i < treeCount; i++) {
     const tbx = treeOffset + i * treeSpacing + (((i * 17) % 7) - 3) * 6;
     const treeH = 60 + (((i * 13 + 7) % 5)) * 14;
@@ -125,53 +126,41 @@ export function drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, cam
   ctx.fill();
   ctx.restore();
 
-  // === CLOUDS — three depth layers with distinct parallax speeds ===
-
-  // Layer A: far, small, slow (parallax 0.12)
-  const cloudsFar = [
-    { ox: 60,  y: h * 0.12, r: 18 },
-    { ox: 240, y: h * 0.09, r: 22 },
-    { ox: 450, y: h * 0.14, r: 16 },
-    { ox: 650, y: h * 0.11, r: 20 },
-    { ox: 850, y: h * 0.08, r: 18 },
-    { ox: 1100,y: h * 0.13, r: 24 },
-    { ox: 1350,y: h * 0.10, r: 19 },
-    { ox: 1600,y: h * 0.07, r: 21 },
+  // === CLOUDS — per-cloud parallax based on y-distance from camera ===
+  // Higher clouds (smaller y) move slower; lower clouds (larger y) move faster
+  const allClouds = [
+    // Far layer — small, high, faint
+    { ox: 60,  y: h * 0.12, r: 18, alpha: 0.55 },
+    { ox: 240, y: h * 0.09, r: 22, alpha: 0.55 },
+    { ox: 450, y: h * 0.14, r: 16, alpha: 0.55 },
+    { ox: 650, y: h * 0.11, r: 20, alpha: 0.55 },
+    { ox: 850, y: h * 0.08, r: 18, alpha: 0.55 },
+    { ox: 1100,y: h * 0.13, r: 24, alpha: 0.55 },
+    { ox: 1350,y: h * 0.10, r: 19, alpha: 0.55 },
+    { ox: 1600,y: h * 0.07, r: 21, alpha: 0.55 },
+    // Mid layer — medium size
+    { ox: 120, y: h * 0.20, r: 30, alpha: 0.80 },
+    { ox: 330, y: h * 0.17, r: 38, alpha: 0.80 },
+    { ox: 570, y: h * 0.22, r: 28, alpha: 0.80 },
+    { ox: 790, y: h * 0.16, r: 42, alpha: 0.80 },
+    { ox: 980, y: h * 0.21, r: 34, alpha: 0.80 },
+    { ox: 1250,y: h * 0.18, r: 36, alpha: 0.80 },
+    { ox: 1500,y: h * 0.15, r: 32, alpha: 0.80 },
+    // Near layer — big, vivid
+    { ox: 80,  y: h * 0.28, r: 48, alpha: 0.92 },
+    { ox: 400, y: h * 0.25, r: 55, alpha: 0.92 },
+    { ox: 720, y: h * 0.30, r: 44, alpha: 0.92 },
+    { ox: 1050,y: h * 0.27, r: 52, alpha: 0.92 },
+    { ox: 1380,y: h * 0.29, r: 46, alpha: 0.92 },
   ];
-  const shiftFar = cameraX * 0.12;
-  for (const c of cloudsFar) {
-    const sx = ((c.ox - shiftFar % (w + 400) + (w + 400) * 4) % (w + 400)) - 100;
-    drawCloud(ctx, sx, c.y, c.r, 'rgba(255,255,255,0.55)');
-  }
 
-  // Layer B: mid, medium speed (parallax 0.22)
-  const cloudsMid = [
-    { ox: 120, y: h * 0.20, r: 30 },
-    { ox: 330, y: h * 0.17, r: 38 },
-    { ox: 570, y: h * 0.22, r: 28 },
-    { ox: 790, y: h * 0.16, r: 42 },
-    { ox: 980, y: h * 0.21, r: 34 },
-    { ox: 1250,y: h * 0.18, r: 36 },
-    { ox: 1500,y: h * 0.15, r: 32 },
-  ];
-  const shiftMid = cameraX * 0.22;
-  for (const c of cloudsMid) {
-    const sx = ((c.ox - shiftMid % (w + 400) + (w + 400) * 4) % (w + 400)) - 100;
-    drawCloud(ctx, sx, c.y, c.r, 'rgba(255,255,255,0.80)');
-  }
-
-  // Layer C: near, big, faster (parallax 0.38)
-  const cloudsNear = [
-    { ox: 80,  y: h * 0.28, r: 48 },
-    { ox: 400, y: h * 0.25, r: 55 },
-    { ox: 720, y: h * 0.30, r: 44 },
-    { ox: 1050,y: h * 0.27, r: 52 },
-    { ox: 1380,y: h * 0.29, r: 46 },
-  ];
-  const shiftNear = cameraX * 0.38;
-  for (const c of cloudsNear) {
-    const sx = ((c.ox - shiftNear % (w + 400) + (w + 400) * 4) % (w + 400)) - 100;
-    drawCloud(ctx, sx, c.y, c.r, 'rgba(255,255,255,0.92)');
+  for (const c of allClouds) {
+    // Parallax rate: 0.06 at very top (y≈0) up to 0.42 at y≈h*0.35
+    const depthRatio = c.y / (h * 0.35);
+    const parallaxRate = 0.06 + depthRatio * 0.36;
+    const shift = cameraX * parallaxRate;
+    const sx = ((c.ox - shift % (w + 400) + (w + 400) * 4) % (w + 400)) - 100;
+    drawCloud(ctx, sx, c.y, c.r, `rgba(255,255,255,${c.alpha})`);
   }
 
 }
@@ -459,6 +448,44 @@ export function drawBall(
   ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth = 1;
   ctx.stroke();
+}
+
+export function drawBallMarker(
+  ctx: CanvasRenderingContext2D,
+  ball: Ball,
+  camera: Camera,
+  playerColor: string,
+  playerName: string
+) {
+  const sx = ball.x - camera.x;
+  const sy = ball.y;
+
+  // Small colored diamond marker
+  ctx.save();
+  ctx.globalAlpha = 0.75;
+
+  // Diamond shape
+  const size = 5;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - size);
+  ctx.lineTo(sx + size, sy);
+  ctx.lineTo(sx, sy + size);
+  ctx.lineTo(sx - size, sy);
+  ctx.closePath();
+  ctx.fillStyle = playerColor;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Player name label above marker
+  ctx.globalAlpha = 0.65;
+  ctx.fillStyle = playerColor;
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(playerName, sx, sy - size - 4);
+
+  ctx.restore();
 }
 
 export function drawAimArrow(

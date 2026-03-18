@@ -69,7 +69,15 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
   const handleHostStart = () => {
     if (!hostConnection) return;
     const hostName = playerNames[0] || 'Host';
-    const names = [hostName, guestName || 'Guest'];
+    const gName = guestName || 'Guest';
+    const names = [hostName, gName];
+    const colors = ['#ef4444', '#3b82f6'];
+    // Tell the guest to start
+    hostConnection.sendMessage({
+      type: 'game-start',
+      players: names.map((n, i) => ({ name: n, color: colors[i] })),
+      totalHoles,
+    });
     onStart(names, totalHoles, hostConnection);
   };
 

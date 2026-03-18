@@ -1,11 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { GameState, createInitialState, startHole, updateParticles, spawnSandParticles, spawnWaterParticles } from '../game/gameState';
-import { stepPhysics, launchBall } from '../game/physics';
+import { stepPhysics, launchBall, createBall } from '../game/physics';
 import { getSegmentAt } from '../game/terrain';
 import { CLUBS, suggestClub } from '../game/clubs';
-import { Camera, updateCamera, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls } from '../game/renderer';
+import { Camera, updateCamera, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls } from '../game/renderer';
 import { startAmbience, stopAmbience, playSwingSound, playPutterSound, playHoleSunkSound, playSandSound, playWaterSound } from '../game/audio';
-import { MultiplayerConnection, HostMessage, GuestMessage, InputAction, serializeState, applySerializedState } from '../game/multiplayer';
+import { MultiplayerConnection, NetMessage } from '../game/multiplayer';
 
 interface GolfGameProps {
   playerNames: string[];
@@ -24,15 +24,17 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   const aimDelayRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const accumRef = useRef<number>(0);
-  const lastBroadcastRef = useRef<number>(0);
   const disconnectedRef = useRef(false);
 
-  // Multiplayer helpers
+  // Multiplayer
   const isMultiplayer = !!multiplayer;
   const isHost = multiplayer?.role === 'host';
   const isGuest = multiplayer?.role === 'guest';
-  // In multiplayer, host is player 0, guest is player 1
   const myPlayerIdx = isGuest ? 1 : 0;
+
+  // Queue for received shots from the other player
+  const pendingShotRef = useRef<{ power: number; aimAngle: number; clubIndex: number } | null>(null);
+  const pendingAdvanceRef = useRef(false);
 
   const isMyTurn = useCallback(() => {
     if (!isMultiplayer) return true;
@@ -54,47 +56,9 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Send state to guest (host only), throttled
-  const broadcastState = useCallback(() => {
-    if (!isHost || !multiplayer) return;
-    const now = performance.now();
-    if (now - lastBroadcastRef.current < 55) return; // ~18/sec
-    lastBroadcastRef.current = now;
-    const msg: HostMessage = { type: 'state-update', state: serializeState(stateRef.current) };
-    multiplayer.sendMessage(msg);
-  }, [isHost, multiplayer]);
-
-  // Send hole data to guest (host only)
-  const broadcastHoleData = useCallback(() => {
-    if (!isHost || !multiplayer) return;
-    const state = stateRef.current;
-    if (!state.holeData) return;
-    const msg: HostMessage = {
-      type: 'hole-data',
-      holeIndex: state.currentHole - 1,
-      holeData: state.holeData,
-    };
-    multiplayer.sendMessage(msg);
-  }, [isHost, multiplayer]);
-
-  // Host: send game-start message after initialization
-  const sendGameStart = useCallback(() => {
-    if (!isHost || !multiplayer) return;
-    const state = stateRef.current;
-    const msg: HostMessage = {
-      type: 'game-start',
-      players: state.players.map(p => ({ name: p.name, color: p.color })),
-      totalHoles: state.totalHoles,
-    };
-    multiplayer.sendMessage(msg);
-  }, [isHost, multiplayer]);
-
-  // Guest sends input action instead of mutating state directly
-  const sendInput = useCallback((action: InputAction) => {
-    if (!isGuest || !multiplayer) return;
-    const msg: GuestMessage = { type: 'input-action', action };
-    multiplayer.sendMessage(msg);
-  }, [isGuest, multiplayer]);
+  const sendMsg = useCallback((msg: NetMessage) => {
+    multiplayer?.sendMessage(msg);
+  }, [multiplayer]);
 
   // ========== INPUT HANDLERS ==========
 
@@ -105,7 +69,6 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
     const state = stateRef.current;
 
-    // Toggle scorecard
     if (e.code === 'KeyF') {
       stateRef.current = { ...state, showScorecard: !state.showScorecard };
       return;
@@ -116,10 +79,6 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
     if (state.phase === 'aiming' && isMyTurn()) {
       if (e.code === 'KeyQ' || e.code === 'ArrowUp') {
         const newIdx = Math.max(0, state.selectedClubIndex - 1);
-        if (isGuest) {
-          sendInput({ action: 'club-select', clubIndex: newIdx });
-          return;
-        }
         const newClub = CLUBS[newIdx];
         const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
@@ -131,10 +90,6 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       }
       if (e.code === 'KeyE' || e.code === 'ArrowDown') {
         const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
-        if (isGuest) {
-          sendInput({ action: 'club-select', clubIndex: newIdx });
-          return;
-        }
         const newClub = CLUBS[newIdx];
         const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
@@ -145,10 +100,6 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         return;
       }
       if (e.code === 'Space') {
-        if (isGuest) {
-          sendInput({ action: 'start-power' });
-          return;
-        }
         stateRef.current = {
           ...state,
           phase: 'powering',
@@ -159,34 +110,24 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       }
     } else if (state.phase === 'powering' && isMyTurn()) {
       if (e.code === 'Space') {
-        const s = stateRef.current;
-        if (!s.ball || !s.holeData) return;
-        if (isGuest) {
-          sendInput({ action: 'launch', power: s.power, aimAngle: s.aimAngle, clubIndex: s.selectedClubIndex });
-          return;
+        doLaunch();
+      }
+    } else if (state.phase === 'scorecard') {
+      if (isMultiplayer) {
+        // In multiplayer, host controls advancement
+        if (isHost) {
+          sendMsg({ type: 'advance' });
+          advanceToNextHole();
         }
-        const club = CLUBS[s.selectedClubIndex];
-        const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
-        if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
-        stateRef.current = {
-          ...s,
-          ball: newBall,
-          phase: 'inFlight',
-          powerActive: false,
-          currentStrokes: s.currentStrokes + 1,
-        };
+        // Guest just signals desire to advance; host will send hole-init
+      } else {
+        advanceToNextHole();
       }
-    } else if (state.phase === 'holeSunk' || state.phase === 'scorecard') {
-      if (isGuest) {
-        sendInput({ action: 'advance' });
-        return;
-      }
-      advanceToNextHole();
     } else if (state.phase === 'gameOver') {
       stopAmbience();
       onBackToMenu();
     }
-  }, [isGuest, isHost, sendInput, isMyTurn]);
+  }, [isMyTurn, sendMsg, isMultiplayer]);
 
   const handleKeyUp = useCallback((e: KeyboardEvent) => {
     keysRef.current.delete(e.code);
@@ -204,10 +145,6 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
     if (state.phase === 'aiming' && isMyTurn()) {
       mouseDownRef.current = { x: e.clientX, y: e.clientY, backward: state.aimAngle > 90 };
-      if (isGuest) {
-        sendInput({ action: 'start-power' });
-        return;
-      }
       stateRef.current = {
         ...state,
         phase: 'powering',
@@ -215,17 +152,20 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         powerDirection: 1,
         powerActive: true,
       };
-    } else if (state.phase === 'holeSunk' || state.phase === 'scorecard') {
-      if (isGuest) {
-        sendInput({ action: 'advance' });
-        return;
+    } else if (state.phase === 'scorecard') {
+      if (isMultiplayer) {
+        if (isHost) {
+          sendMsg({ type: 'advance' });
+          advanceToNextHole();
+        }
+      } else {
+        advanceToNextHole();
       }
-      advanceToNextHole();
     } else if (state.phase === 'gameOver') {
       stopAmbience();
       onBackToMenu();
     }
-  }, [isGuest, isHost, sendInput, isMyTurn]);
+  }, [isMyTurn, sendMsg, isMultiplayer]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const state = stateRef.current;
@@ -243,40 +183,58 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       ? Math.max(95, Math.min(175, baseAngle + angleOffset))
       : Math.max(5, Math.min(85, baseAngle + angleOffset));
 
-    if (isGuest) {
-      sendInput({ action: 'aim', angle: newAngle });
-      return;
-    }
     stateRef.current = { ...state, aimAngle: newAngle };
-  }, [isGuest, sendInput, isMyTurn]);
+  }, [isMyTurn]);
 
   const handleMouseUp = useCallback(() => {
     mouseHeldRef.current = false;
     const state = stateRef.current;
     if (state.phase === 'powering' && mouseDownRef.current && isMyTurn()) {
-      const s = stateRef.current;
-      if (!s.ball || !s.holeData) {
-        mouseDownRef.current = null;
-        return;
-      }
-      if (isGuest) {
-        sendInput({ action: 'launch', power: s.power, aimAngle: s.aimAngle, clubIndex: s.selectedClubIndex });
-        mouseDownRef.current = null;
-        return;
-      }
-      const club = CLUBS[s.selectedClubIndex];
-      const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
-      if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
-      stateRef.current = {
-        ...s,
-        ball: newBall,
-        phase: 'inFlight',
-        powerActive: false,
-        currentStrokes: s.currentStrokes + 1,
-      };
+      doLaunch();
       mouseDownRef.current = null;
     }
-  }, [isGuest, isHost, sendInput, isMyTurn]);
+  }, [isMyTurn]);
+
+  // Launch the ball — called when it's MY turn
+  function doLaunch() {
+    const s = stateRef.current;
+    if (!s.ball || !s.holeData) return;
+    const club = CLUBS[s.selectedClubIndex];
+    const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
+    if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
+
+    // Send shot to other player
+    if (isMultiplayer) {
+      sendMsg({ type: 'shot', power: s.power, aimAngle: s.aimAngle, clubIndex: s.selectedClubIndex });
+    }
+
+    stateRef.current = {
+      ...s,
+      ball: newBall,
+      phase: 'inFlight',
+      powerActive: false,
+      currentStrokes: s.currentStrokes + 1,
+    };
+  }
+
+  // Apply a shot received from the other player
+  function applyRemoteShot(power: number, aimAngle: number, clubIndex: number) {
+    const s = stateRef.current;
+    if (!s.ball || !s.holeData) return;
+    const club = CLUBS[clubIndex];
+    const newBall = launchBall(s.ball, aimAngle, power, s.wind.speed * s.wind.direction, club);
+    if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
+    stateRef.current = {
+      ...s,
+      ball: newBall,
+      aimAngle,
+      power,
+      selectedClubIndex: clubIndex,
+      phase: 'inFlight',
+      powerActive: false,
+      currentStrokes: s.currentStrokes + 1,
+    };
+  }
 
   function advanceToNextHole() {
     const s = stateRef.current;
@@ -284,15 +242,22 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
     if (nextHole > s.totalHoles) {
       stateRef.current = { ...s, phase: 'gameOver' };
     } else {
-      const newState = startHole({ ...s, currentHole: nextHole });
-      stateRef.current = newState;
-      cameraRef.current = { x: 0, y: 0 };
-      // Send hole data to guest
       if (isHost) {
-        setTimeout(() => {
-          broadcastHoleData();
-          broadcastState();
-        }, 50);
+        // Host generates terrain and sends to guest
+        const newState = startHole({ ...s, currentHole: nextHole });
+        stateRef.current = newState;
+        cameraRef.current = { x: 0, y: 0 };
+        if (newState.holeData) {
+          sendMsg({ type: 'hole-init', holeIndex: nextHole - 1, holeData: newState.holeData, wind: newState.wind });
+        }
+      } else if (isGuest) {
+        // Guest: will receive hole-init from host — just wait
+        stateRef.current = { ...s, phase: 'setup', currentHole: nextHole };
+      } else {
+        // Local play
+        const newState = startHole({ ...s, currentHole: nextHole });
+        stateRef.current = newState;
+        cameraRef.current = { x: 0, y: 0 };
       }
     }
   }
@@ -301,110 +266,65 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   useEffect(() => {
     if (!multiplayer) return;
 
-    // Handle disconnect
-    const checkDisconnect = () => {
-      multiplayer.connection.on('close', () => {
-        disconnectedRef.current = true;
-        setDisconnected(true);
-      });
-    };
-    checkDisconnect();
+    multiplayer.connection.on('close', () => {
+      disconnectedRef.current = true;
+      setDisconnected(true);
+    });
 
-    if (isHost) {
-      // Host receives guest inputs
-      multiplayer.onMessage((msg: any) => {
-        if (msg.type !== 'input-action') return;
-        const action: InputAction = msg.action;
-        const state = stateRef.current;
-
-        switch (action.action) {
-          case 'aim': {
-            stateRef.current = { ...state, aimAngle: action.angle };
-            break;
-          }
-          case 'club-select': {
-            const newClub = CLUBS[action.clubIndex];
-            const aimingBackward = state.aimAngle > 90;
-            stateRef.current = {
-              ...state,
-              selectedClubIndex: action.clubIndex,
-              aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle,
-            };
-            break;
-          }
-          case 'start-power': {
-            if (state.phase === 'aiming') {
-              stateRef.current = {
-                ...state,
-                phase: 'powering',
-                power: 0,
-                powerDirection: 1,
-                powerActive: true,
-              };
-            }
-            break;
-          }
-          case 'launch': {
-            if (state.phase === 'powering' && state.ball && state.holeData) {
-              const club = CLUBS[action.clubIndex];
-              const newBall = launchBall(state.ball, action.aimAngle, action.power, state.wind.speed * state.wind.direction, club);
-              if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
-              stateRef.current = {
-                ...state,
-                ball: newBall,
-                aimAngle: action.aimAngle,
-                power: action.power,
-                selectedClubIndex: action.clubIndex,
-                phase: 'inFlight',
-                powerActive: false,
-                currentStrokes: state.currentStrokes + 1,
-              };
-            }
-            break;
-          }
-          case 'advance': {
-            if (state.phase === 'holeSunk' || state.phase === 'scorecard') {
-              advanceToNextHole();
-            }
-            break;
-          }
+    multiplayer.onMessage((msg: NetMessage) => {
+      switch (msg.type) {
+        case 'shot': {
+          pendingShotRef.current = { power: msg.power, aimAngle: msg.aimAngle, clubIndex: msg.clubIndex };
+          break;
         }
-      });
-
-      // Send game-start and initial hole data
-      sendGameStart();
-      setTimeout(() => {
-        broadcastHoleData();
-        broadcastState();
-      }, 100);
-    }
-
-    if (isGuest) {
-      // Guest receives state updates and hole data
-      multiplayer.onMessage((msg: any) => {
-        if (msg.type === 'state-update') {
-          const current = stateRef.current;
-          const prevPhase = current.phase;
-          stateRef.current = applySerializedState(current, msg.state);
-
-          // Play sounds based on phase transitions
-          const newPhase = msg.state.phase;
-          if (prevPhase !== 'holeSunk' && newPhase === 'holeSunk') playHoleSunkSound();
-          if (prevPhase !== 'inFlight' && newPhase === 'inFlight') {
-            const club = CLUBS[msg.state.selectedClubIndex];
-            if (club?.name === 'Putter') playPutterSound(); else playSwingSound();
+        case 'advance': {
+          // In lockstep, advance comes from host — guest waits for hole-init
+          // For local/host this triggers advancement
+          if (isGuest) {
+            // Guest just waits for hole-init that follows
+          } else {
+            pendingAdvanceRef.current = true;
           }
-        } else if (msg.type === 'hole-data') {
+          break;
+        }
+        case 'hole-init': {
           const state = stateRef.current;
           const newAllHoleData = [...state.allHoleData];
           newAllHoleData[msg.holeIndex] = msg.holeData;
-          stateRef.current = {
+          const updatedState = {
             ...state,
             allHoleData: newAllHoleData,
-            holeData: msg.holeData,
+            wind: msg.wind,
           };
+          const newState = startHole({ ...updatedState, currentHole: msg.holeIndex + 1 });
+          stateRef.current = { ...newState, wind: msg.wind };
+          cameraRef.current = { x: 0, y: 0 };
+          break;
         }
-      });
+        case 'ready': {
+          // Guest is ready — send current hole data
+          if (isHost) {
+            const state = stateRef.current;
+            if (state.holeData) {
+              sendMsg({
+                type: 'hole-init',
+                holeIndex: state.currentHole - 1,
+                holeData: state.holeData,
+                wind: state.wind,
+              });
+            }
+          }
+          break;
+        }
+        case 'game-start': {
+          break;
+        }
+      }
+    });
+
+    // Guest: signal ready so host sends hole data
+    if (isGuest) {
+      sendMsg({ type: 'ready' });
     }
   }, [multiplayer, isHost, isGuest]);
 
@@ -421,14 +341,10 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   useEffect(() => {
     lastTimeRef.current = 0;
     accumRef.current = 0;
-    stateRef.current = startHole(stateRef.current);
-    // If host, send initial hole data after a small delay
-    if (isHost) {
-      setTimeout(() => {
-        broadcastHoleData();
-        broadcastState();
-      }, 200);
+    if (!isGuest) {
+      stateRef.current = startHole(stateRef.current);
     }
+    // Guest waits for hole-init from host
   }, []);
 
   useEffect(() => {
@@ -453,8 +369,7 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       if (!state.holeData || !state.ball) {
         ctx.clearRect(0, 0, width, height);
         drawSky(ctx, width, height, cameraRef.current.x);
-        // Guest waiting for hole data
-        if (isGuest) {
+        if (isGuest && state.phase === 'setup') {
           ctx.fillStyle = '#fbbf24';
           ctx.font = 'bold 16px monospace';
           ctx.textAlign = 'center';
@@ -466,18 +381,28 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
       const { holeData } = state;
 
-      // Guest: skip physics sim, just render received state
-      if (isGuest) {
-        accumRef.current = 0; // don't accumulate
+      // Process pending remote shot
+      if (pendingShotRef.current && state.phase === 'aiming' && !isMyTurn()) {
+        const shot = pendingShotRef.current;
+        pendingShotRef.current = null;
+        applyRemoteShot(shot.power, shot.aimAngle, shot.clubIndex);
+        state = stateRef.current;
       }
 
-      // Run fixed-step game logic (host + local only)
+      // Process pending advance
+      if (pendingAdvanceRef.current && state.phase === 'scorecard') {
+        pendingAdvanceRef.current = false;
+        advanceToNextHole();
+        state = stateRef.current;
+      }
+
+      // Run fixed-step game logic — IDENTICAL on both host and guest
       while (accumRef.current >= FIXED_DT) {
         accumRef.current -= FIXED_DT;
         frameCountRef.current++;
         state = stateRef.current;
 
-      // Handle aim key input
+      // Handle aim key input (only when it's my turn)
       if (state.phase === 'aiming' && isMyTurn()) {
         aimDelayRef.current = Math.max(0, aimDelayRef.current - 1);
         const aimSpeed = 1.2;
@@ -489,12 +414,8 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         if (dAngle !== 0) {
           const raw = state.aimAngle + dAngle;
           const newAngle = Math.max(5, Math.min(175, raw));
-          if (isGuest) {
-            sendInput({ action: 'aim', angle: newAngle });
-          } else {
-            stateRef.current = { ...state, aimAngle: newAngle };
-            state = stateRef.current;
-          }
+          stateRef.current = { ...state, aimAngle: newAngle };
+          state = stateRef.current;
         }
       }
 
@@ -513,7 +434,7 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         state = stateRef.current;
       }
 
-      // Physics update
+      // Physics update — runs on BOTH host and guest
       if (state.phase === 'inFlight' || state.phase === 'rolling') {
         let ball = state.ball!;
         let newParticles = [...state.particles];
@@ -527,7 +448,10 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
           rollingFramesRef.current = 0;
         }
         const autoFastForward = rollingFramesRef.current > 180;
-        const simSpeed = (mouseHeldRef.current || autoFastForward) ? 6 : 1;
+        // In multiplayer, no manual fast-forward — both sides must step identically
+        const simSpeed = isMultiplayer
+          ? (autoFastForward ? 6 : 1)
+          : ((mouseHeldRef.current || autoFastForward) ? 6 : 1);
         for (let step = 0; step < simSpeed; step++) {
           const result = stepPhysics(ball, holeData.terrain, holeData.segments, holeData.holeX, holeData.holeY, state.wind.speed * state.wind.direction);
           ball = result.ball;
@@ -547,6 +471,37 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
         newParticles = updateParticles(newParticles);
 
+        // Helper: find next unsunk player
+        const findNextPlayer = () => {
+          const numPlayers = state.players.length;
+          for (let i = 1; i <= numPlayers; i++) {
+            const idx = (state.currentPlayerIdx + i) % numPlayers;
+            if (!state.playerSunk[idx]) return idx;
+          }
+          return -1;
+        };
+
+        // Helper: switch to a player
+        const switchToPlayer = (nextIdx: number) => {
+          const nextBall = state.playerBalls[nextIdx];
+          if (!nextBall) return;
+          const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+          const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - nextBall.x) * ypp));
+          const sugIdx = suggestClub(ydsLeft);
+          const pastHole = nextBall.x > holeData.holeX;
+          const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+          stateRef.current = {
+            ...state,
+            currentPlayerIdx: nextIdx,
+            ball: { ...nextBall, atRest: true, rolling: false, inFlight: false, vx: 0, vy: 0 },
+            currentStrokes: state.playerStrokes[nextIdx],
+            phase: 'aiming',
+            particles: newParticles,
+            selectedClubIndex: sugIdx,
+            aimAngle: sugAngle,
+          };
+        };
+
         if (inHole) {
           playHoleSunkSound();
           const updatedPlayers = state.players.map((p, i) =>
@@ -554,31 +509,93 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
               ? { ...p, scores: [...p.scores, state.currentStrokes] }
               : p
           );
+          const updatedSunk = [...state.playerSunk];
+          updatedSunk[state.currentPlayerIdx] = true;
+          const updatedPlayerStrokes = [...state.playerStrokes];
+          updatedPlayerStrokes[state.currentPlayerIdx] = state.currentStrokes;
+
+          const allSunk = updatedSunk.every(s => s);
           stateRef.current = {
-            ...state, ball, phase: 'holeSunk', holeSunkTimer: 180,
+            ...state, ball, phase: 'holeSunk',
+            holeSunkTimer: (allSunk || state.players.length === 1) ? 180 : 120,
             particles: newParticles, players: updatedPlayers,
+            playerSunk: updatedSunk, playerStrokes: updatedPlayerStrokes,
           };
         } else if (inWater) {
           playWaterSound();
-          const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-          const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
-          const sugIdx = suggestClub(ydsLeft);
-          const pastHole = ball.x > holeData.holeX;
-          const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-          stateRef.current = {
-            ...state, ball, phase: 'aiming', currentStrokes: state.currentStrokes + 1,
-            particles: newParticles, selectedClubIndex: sugIdx, aimAngle: sugAngle,
-          };
+          const penaltyStrokes = state.currentStrokes + 1;
+          const updatedPlayerStrokes = [...state.playerStrokes];
+          updatedPlayerStrokes[state.currentPlayerIdx] = penaltyStrokes;
+          const safeBall = { ...ball, atRest: true, rolling: false, inFlight: false, vx: 0, vy: 0 };
+          const updatedPlayerBalls = [...state.playerBalls];
+          updatedPlayerBalls[state.currentPlayerIdx] = safeBall;
+
+          if (isMultiplayer && state.players.length > 1) {
+            const nextIdx = findNextPlayer();
+            if (nextIdx >= 0 && nextIdx !== state.currentPlayerIdx) {
+              state = { ...state, currentStrokes: penaltyStrokes, playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls, particles: newParticles };
+              stateRef.current = state;
+              switchToPlayer(nextIdx);
+            } else {
+              const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+              const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - safeBall.x) * ypp));
+              const sugIdx = suggestClub(ydsLeft);
+              const pastHole = safeBall.x > holeData.holeX;
+              const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+              stateRef.current = {
+                ...state, ball: safeBall, phase: 'aiming', currentStrokes: penaltyStrokes,
+                particles: newParticles, selectedClubIndex: sugIdx, aimAngle: sugAngle,
+                playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls,
+              };
+            }
+          } else {
+            const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+            const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
+            const sugIdx = suggestClub(ydsLeft);
+            const pastHole = ball.x > holeData.holeX;
+            const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+            stateRef.current = {
+              ...state, ball, phase: 'aiming', currentStrokes: penaltyStrokes,
+              particles: newParticles, selectedClubIndex: sugIdx, aimAngle: sugAngle,
+              playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls,
+            };
+          }
         } else if (landed) {
-          const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-          const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
-          const sugIdx = suggestClub(ydsLeft);
-          const pastHole = ball.x > holeData.holeX;
-          const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-          stateRef.current = {
-            ...state, ball, phase: 'aiming', particles: newParticles,
-            selectedClubIndex: sugIdx, aimAngle: sugAngle,
-          };
+          const updatedPlayerBalls = [...state.playerBalls];
+          updatedPlayerBalls[state.currentPlayerIdx] = { ...ball };
+          const updatedPlayerStrokes = [...state.playerStrokes];
+          updatedPlayerStrokes[state.currentPlayerIdx] = state.currentStrokes;
+
+          if (isMultiplayer && state.players.length > 1) {
+            const nextIdx = findNextPlayer();
+            if (nextIdx >= 0 && nextIdx !== state.currentPlayerIdx) {
+              state = { ...state, playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes, particles: newParticles };
+              stateRef.current = state;
+              switchToPlayer(nextIdx);
+            } else {
+              const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+              const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
+              const sugIdx = suggestClub(ydsLeft);
+              const pastHole = ball.x > holeData.holeX;
+              const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+              stateRef.current = {
+                ...state, ball, phase: 'aiming', particles: newParticles,
+                selectedClubIndex: sugIdx, aimAngle: sugAngle,
+                playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
+              };
+            }
+          } else {
+            const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+            const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
+            const sugIdx = suggestClub(ydsLeft);
+            const pastHole = ball.x > holeData.holeX;
+            const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+            stateRef.current = {
+              ...state, ball, phase: 'aiming', particles: newParticles,
+              selectedClubIndex: sugIdx, aimAngle: sugAngle,
+              playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
+            };
+          }
         } else {
           const newPhase = ball.rolling ? 'rolling' : 'inFlight';
           stateRef.current = { ...state, ball, phase: newPhase, particles: newParticles };
@@ -602,28 +619,46 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       if (state.phase === 'holeSunk') {
         const newTimer = state.holeSunkTimer - 1;
         if (newTimer <= 0) {
-          const nextPlayerIdx = (state.currentPlayerIdx + 1) % state.players.length;
-          if (nextPlayerIdx === 0) {
+          const allSunk = state.playerSunk.every(s => s);
+          if (allSunk || state.players.length === 1) {
             stateRef.current = { ...state, phase: 'scorecard', holeSunkTimer: 0 };
             state = stateRef.current;
           } else {
-            const nextBall = { x: holeData.teeX, y: holeData.teeY - 10, vx: 0, vy: 0, inFlight: false, rolling: false, atRest: true, trail: [], lastSafeX: holeData.teeX, lastSafeY: holeData.teeY - 10, waterPenalty: false, launchAngle: 0, spin: 0 };
-            const nextSugIdx = suggestClub(holeData.distance);
-            stateRef.current = {
-              ...state, currentPlayerIdx: nextPlayerIdx, ball: nextBall,
-              phase: 'aiming', currentStrokes: 0, holeSunkTimer: 0,
-              selectedClubIndex: nextSugIdx, aimAngle: CLUBS[nextSugIdx].launchAngle,
-            };
-            state = stateRef.current;
+            // Switch to next unsunk player
+            const nextIdx = (() => {
+              for (let i = 1; i <= state.players.length; i++) {
+                const idx = (state.currentPlayerIdx + i) % state.players.length;
+                if (!state.playerSunk[idx]) return idx;
+              }
+              return -1;
+            })();
+            if (nextIdx >= 0) {
+              const nextBall = state.playerBalls[nextIdx];
+              if (nextBall) {
+                const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+                const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - nextBall.x) * ypp));
+                const sugIdx = suggestClub(ydsLeft);
+                const pastHole = nextBall.x > holeData.holeX;
+                const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+                stateRef.current = {
+                  ...state, currentPlayerIdx: nextIdx,
+                  ball: { ...nextBall, atRest: true, rolling: false, inFlight: false, vx: 0, vy: 0 },
+                  currentStrokes: state.playerStrokes[nextIdx],
+                  phase: 'aiming', holeSunkTimer: 0,
+                  selectedClubIndex: sugIdx, aimAngle: sugAngle,
+                };
+                state = stateRef.current;
+              }
+            } else {
+              stateRef.current = { ...state, phase: 'scorecard', holeSunkTimer: 0 };
+              state = stateRef.current;
+            }
           }
         } else {
           stateRef.current = { ...state, holeSunkTimer: newTimer };
           state = stateRef.current;
         }
       }
-
-      // Host: broadcast state periodically
-      if (isHost) broadcastState();
 
       } // end fixed-timestep while loop
 
@@ -652,9 +687,18 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       drawHoleFlag(ctx, holeData.holeX, holeData.holeY, camera, frame);
       drawParticles(ctx, state.particles, camera);
 
+      // Draw other players' ball markers (before active ball so active is on top)
+      for (let pi = 0; pi < state.players.length; pi++) {
+        if (pi === state.currentPlayerIdx) continue; // skip active player
+        const otherBall = state.playerBalls[pi];
+        if (otherBall && !state.playerSunk[pi]) {
+          drawBallMarker(ctx, otherBall, camera, state.players[pi].color, state.players[pi].name);
+        }
+      }
+
       if (state.ball) {
         drawBall(ctx, state.ball, camera, state.players[state.currentPlayerIdx]?.color ?? '#ffffff');
-        if (state.phase === 'aiming' || state.phase === 'powering') {
+        if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
           drawAimArrow(ctx, state.ball, state.aimAngle, camera);
         }
       }
@@ -662,7 +706,7 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       drawHUD(ctx, state, width);
       drawControls(ctx, state, width, height);
 
-      if (state.phase === 'aiming' || state.phase === 'powering') {
+      if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
         drawClubCarousel(ctx, state.selectedClubIndex, width, height);
         if (state.ball && state.holeData) {
           drawYardageRuler(ctx, state.ball, state.holeData, width, height);
@@ -672,6 +716,19 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
           : null;
         const renderPowerCap = ballSeg?.type === 'sand' ? 0.5 : 1.0;
         drawPowerMeter(ctx, state.power, state.phase === 'powering', width, height, renderPowerCap);
+      }
+
+      // When it's NOT my turn and phase is aiming, show waiting indicator
+      if (isMultiplayer && state.phase === 'aiming' && !isMyTurn()) {
+        const otherPlayer = state.players[state.currentPlayerIdx];
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(width / 2 - 120, height / 2 - 30, 240, 50);
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${otherPlayer?.name ?? 'Opponent'} is aiming...`, width / 2, height / 2);
+        ctx.restore();
       }
 
       if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
@@ -703,7 +760,8 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
           ctx.fillStyle = '#4ade80';
           ctx.font = 'bold 14px monospace';
           ctx.textAlign = 'center';
-          ctx.fillText('Press SPACE or ENTER for next hole', width / 2, height - 30);
+          const scorecardMsg = (isMultiplayer && isGuest) ? 'Waiting for host to continue...' : 'Press SPACE or click for next hole';
+          ctx.fillText(scorecardMsg, width / 2, height - 30);
         }
       }
 
@@ -711,21 +769,18 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         drawGameOver(ctx, state, width, height);
       }
 
-      // Multiplayer turn indicator
-      if (isMultiplayer && (state.phase === 'aiming' || state.phase === 'powering')) {
+      // Multiplayer turn indicator during active play
+      if (isMultiplayer && (state.phase === 'powering' || state.phase === 'inFlight' || state.phase === 'rolling')) {
         const currentPlayer = state.players[state.currentPlayerIdx];
-        const turnText = isMyTurn()
-          ? 'YOUR TURN'
-          : `${currentPlayer?.name ?? 'Opponent'}'s turn`;
+        const turnText = isMyTurn() ? 'YOUR SHOT' : `${currentPlayer?.name ?? 'Opponent'}'s shot`;
         const turnColor = isMyTurn() ? '#4ade80' : '#fbbf24';
-
         ctx.save();
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(width / 2 - 100, 50, 200, 30);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(width / 2 - 80, 50, 160, 26);
         ctx.fillStyle = turnColor;
-        ctx.font = 'bold 14px monospace';
+        ctx.font = 'bold 13px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(turnText, width / 2, 70);
+        ctx.fillText(turnText, width / 2, 68);
         ctx.restore();
       }
 
