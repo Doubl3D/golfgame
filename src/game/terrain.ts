@@ -151,23 +151,23 @@ export function generateHole(holeNumber: number): HoleData {
     });
   }
 
-  // Fringe — faster roll than fairway (0.94)
+  // Fringe — fast roll surface
   segments.push({
     type: 'fringe',
     startX: totalWidth - 600,
     endX: totalWidth - 400,
     color: '#3da03d',
-    friction: 0.94,
+    friction: 1.05,
     label: 'Fringe',
   });
 
-  // Green — very fast putt surface (0.98)
+  // Green — very fast putt surface
   segments.push({
     type: 'green',
     startX: totalWidth - 400,
     endX: totalWidth,
     color: '#50c050',
-    friction: 0.98,
+    friction: 1.1,
     label: 'Green',
   });
 

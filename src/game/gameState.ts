@@ -1,5 +1,6 @@
 import { HoleData, generateHole } from './terrain';
 import { Ball, createBall } from './physics';
+import { CLUBS, suggestClub } from './clubs';
 
 export interface Player {
   name: string;
@@ -57,6 +58,7 @@ export interface GameState {
   holeSunkTimer: number;
   scorecardTimer: number;
   lastShotResult: string;
+  selectedClubIndex: number;
 }
 
 function randomWind(): Wind {
@@ -107,6 +109,7 @@ export function createInitialState(
     holeSunkTimer: 0,
     scorecardTimer: 0,
     lastShotResult: '',
+    selectedClubIndex: 0,
   };
 }
 
@@ -114,12 +117,13 @@ export function startHole(state: GameState): GameState {
   // Use pre-generated terrain cache — no on-the-fly generation
   const holeData = state.allHoleData[state.currentHole - 1] ?? generateHole(state.currentHole);
   const ball = createBall(holeData.teeX, holeData.teeY - 10);
+  const suggested = suggestClub(holeData.distance);
   return {
     ...state,
     phase: 'holeIntro',
     holeData,
     ball,
-    aimAngle: 25,
+    aimAngle: CLUBS[suggested].launchAngle,
     power: 0,
     powerDirection: 1,
     powerActive: false,
@@ -128,6 +132,7 @@ export function startHole(state: GameState): GameState {
     wind: randomWind(),
     particles: [],
     lastShotResult: '',
+    selectedClubIndex: suggested,
   };
 }
 

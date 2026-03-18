@@ -1,6 +1,7 @@
 import { HoleData, getSegmentAt } from './terrain';
 import { Ball } from './physics';
 import { GameState, Particle } from './gameState';
+import { Club, CLUBS } from './clubs';
 
 export interface Camera {
   x: number; // world x at left edge of screen
@@ -520,7 +521,15 @@ export function drawHUD(
   ctx.font = '12px monospace';
   ctx.fillText(`Hole ${state.currentHole}/${state.totalHoles}  Par ${state.holeData.par}`, 20, 50);
   ctx.fillText(`Strokes: ${state.currentStrokes}`, 20, 66);
-  ctx.fillText(`Dist: ${state.holeData.distance} yds`, 20, 82);
+  // Live remaining distance
+  let distLabel = `Dist: ${state.holeData.distance} yds`;
+  if (state.ball) {
+    const pxDist = Math.abs(state.holeData.holeX - state.ball.x);
+    const ypp = state.holeData.distance / (state.holeData.holeX - state.holeData.teeX);
+    const remaining = Math.max(0, Math.round(pxDist * ypp));
+    distLabel = `Dist: ${remaining} yds`;
+  }
+  ctx.fillText(distLabel, 20, 82);
 
   // Wind indicator
   const windX = canvasWidth - 160;
@@ -556,6 +565,158 @@ export function drawHUD(
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(state.wind.label, windX + 75, 56);
+}
+
+export function drawClubCarousel(
+  ctx: CanvasRenderingContext2D,
+  selectedIndex: number,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const club = CLUBS[selectedIndex];
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight - 148;
+
+  // How many neighbors to show on each side
+  const visible = 2;
+
+  // Background pill
+  const bgW = 300;
+  const bgH = 36;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, cx - bgW / 2, cy - bgH / 2, bgW, bgH, 10);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, cx - bgW / 2, cy - bgH / 2, bgW, bgH, 10);
+  ctx.stroke();
+
+  // Draw neighboring clubs fading out
+  for (let offset = -visible; offset <= visible; offset++) {
+    const idx = selectedIndex + offset;
+    if (idx < 0 || idx >= CLUBS.length) continue;
+
+    const c = CLUBS[idx];
+    const xOff = offset * 58;
+    const isSelected = offset === 0;
+
+    // Opacity fades with distance
+    const alpha = isSelected ? 1.0 : Math.max(0.2, 1 - Math.abs(offset) * 0.35);
+    ctx.globalAlpha = alpha;
+
+    if (isSelected) {
+      // Highlight box behind selected club
+      ctx.fillStyle = 'rgba(34,197,94,0.25)';
+      roundRect(ctx, cx + xOff - 26, cy - 15, 52, 30, 6);
+      ctx.fill();
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      roundRect(ctx, cx + xOff - 26, cy - 15, 52, 30, 6);
+      ctx.stroke();
+    }
+
+    // Club short name
+    ctx.fillStyle = isSelected ? '#ffffff' : '#94a3b8';
+    ctx.font = isSelected ? 'bold 14px monospace' : '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(c.shortName, cx + xOff, cy + 4);
+  }
+
+  ctx.globalAlpha = 1.0;
+
+  // Arrows on sides
+  ctx.fillStyle = selectedIndex > 0 ? '#94a3b8' : '#333';
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('◀', cx - bgW / 2 + 14, cy + 5);
+
+  ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? '#94a3b8' : '#333';
+  ctx.fillText('▶', cx + bgW / 2 - 14, cy + 5);
+
+  // Club name + range below
+  ctx.fillStyle = '#b0b0b0';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${club.name} · ${club.maxRange} yds`, cx, cy + bgH / 2 + 12);
+}
+
+export function drawYardageRuler(
+  ctx: CanvasRenderingContext2D,
+  ball: Ball,
+  holeData: HoleData,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const pixelDist = Math.abs(holeData.holeX - ball.x);
+  const yardsPerPixel = holeData.distance / (holeData.holeX - holeData.teeX);
+  const yardsRemaining = Math.max(0, Math.round(pixelDist * yardsPerPixel));
+
+  const rulerW = 250;
+  const rulerH = 14;
+  const rx = canvasWidth / 2 - rulerW / 2;
+  const ry = canvasHeight - 110;
+
+  // Background
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  roundRect(ctx, rx - 6, ry - 16, rulerW + 12, rulerH + 28, 6);
+  ctx.fill();
+
+  // Yardage label
+  ctx.fillStyle = '#b0b0b0';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${yardsRemaining} yds to pin`, canvasWidth / 2, ry - 5);
+
+  // Ruler track
+  ctx.fillStyle = '#1a1a1a';
+  roundRect(ctx, rx, ry, rulerW, rulerH, 3);
+  ctx.fill();
+
+  // Fill representing remaining distance (full = far, empty = close)
+  const totalYards = holeData.distance;
+  const ratio = Math.min(1, yardsRemaining / totalYards);
+  const fillW = ratio * rulerW;
+
+  // Gradient: green (close) to white (far)
+  if (fillW > 0) {
+    const rGrad = ctx.createLinearGradient(rx, 0, rx + rulerW, 0);
+    rGrad.addColorStop(0, '#22c55e');
+    rGrad.addColorStop(0.5, '#86efac');
+    rGrad.addColorStop(1, '#ffffff');
+    ctx.fillStyle = rGrad;
+    roundRect(ctx, rx, ry, fillW, rulerH, 3);
+    ctx.fill();
+  }
+
+  // Tick marks for every 50 yards
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'center';
+  const step = 50;
+  for (let y = step; y < totalYards; y += step) {
+    const tickX = rx + (y / totalYards) * rulerW;
+    ctx.beginPath();
+    ctx.moveTo(tickX, ry);
+    ctx.lineTo(tickX, ry + rulerH);
+    ctx.stroke();
+  }
+
+  // Border
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, rx, ry, rulerW, rulerH, 3);
+  ctx.stroke();
+
+  // Pin flag icon at the right end
+  ctx.fillStyle = '#ef4444';
+  ctx.beginPath();
+  ctx.moveTo(rx + rulerW - 2, ry + 1);
+  ctx.lineTo(rx + rulerW - 2, ry + rulerH - 1);
+  ctx.lineTo(rx + rulerW - 8, ry + rulerH / 2);
+  ctx.closePath();
+  ctx.fill();
 }
 
 export function drawPowerMeter(
@@ -887,20 +1048,24 @@ export function drawControls(
     if (playerIdx === 0) lines.push('← → Aim  |  SPACE: Power');
     else if (playerIdx === 1) lines.push('A D Aim  |  SPACE: Power');
     else lines.push('SPACE: Power');
-    lines.push('F: Scorecard');
+    lines.push('Q/E or ↑/↓: Club  |  F: Scorecard');
   } else if (state.phase === 'powering') {
     lines.push('SPACE: Launch!');
   }
 
   if (lines.length === 0) return;
 
+  const controlText = lines.join('  |  ');
+  ctx.font = '11px monospace';
+  const textW = ctx.measureText(controlText).width;
+  const barW = Math.max(240, textW + 30);
+
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(canvasWidth / 2 - 120, canvasHeight - 36, 240, 28);
+  ctx.fillRect(canvasWidth / 2 - barW / 2, canvasHeight - 36, barW, 28);
 
   ctx.fillStyle = '#94a3b8';
-  ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(lines.join('  |  '), canvasWidth / 2, canvasHeight - 17);
+  ctx.fillText(controlText, canvasWidth / 2, canvasHeight - 17);
 }
 
 function roundRect(

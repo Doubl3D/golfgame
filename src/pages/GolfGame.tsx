@@ -2,7 +2,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { GameState, createInitialState, startHole, updateParticles, spawnSandParticles, spawnWaterParticles } from '../game/gameState';
 import { stepPhysics, launchBall } from '../game/physics';
 import { getSegmentAt } from '../game/terrain';
-import { Camera, updateCamera, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls } from '../game/renderer';
+import { CLUBS, suggestClub } from '../game/clubs';
+import { Camera, updateCamera, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls } from '../game/renderer';
 import { startAmbience, stopAmbience, playHoleSunkSound, playSandSound, playWaterSound } from '../game/audio';
 
 interface GolfGameProps {
@@ -49,6 +50,27 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
     if (state.showScorecard) return;
 
     if (state.phase === 'aiming') {
+      // Club selection: Q/E or ArrowUp/ArrowDown cycle through clubs
+      if (e.code === 'KeyQ' || e.code === 'ArrowUp') {
+        const newIdx = Math.max(0, state.selectedClubIndex - 1);
+        const newClub = CLUBS[newIdx];
+        stateRef.current = {
+          ...state,
+          selectedClubIndex: newIdx,
+          aimAngle: newClub.launchAngle,
+        };
+        return;
+      }
+      if (e.code === 'KeyE' || e.code === 'ArrowDown') {
+        const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+        const newClub = CLUBS[newIdx];
+        stateRef.current = {
+          ...state,
+          selectedClubIndex: newIdx,
+          aimAngle: newClub.launchAngle,
+        };
+        return;
+      }
       if (e.code === 'Space') {
         stateRef.current = {
           ...state,
@@ -62,7 +84,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
       if (e.code === 'Space') {
         const s = stateRef.current;
         if (!s.ball || !s.holeData) return;
-        const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction);
+        const club = CLUBS[s.selectedClubIndex];
+        const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
         stateRef.current = {
           ...s,
           ball: newBall,
@@ -171,21 +194,20 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         let dAngle = 0;
 
         if (playerIdx === 0) {
-          if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = -aimSpeed;
-          if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = aimSpeed;
+          if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = aimSpeed;
+          if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = -aimSpeed;
         } else if (playerIdx === 1) {
-          if (keys.has('KeyA')) dAngle = -aimSpeed;
-          if (keys.has('KeyD')) dAngle = aimSpeed;
+          if (keys.has('KeyA')) dAngle = aimSpeed;
+          if (keys.has('KeyD')) dAngle = -aimSpeed;
         } else {
-          if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = -aimSpeed;
-          if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = aimSpeed;
+          if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = aimSpeed;
+          if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = -aimSpeed;
         }
 
         if (dAngle !== 0) {
-          // Allow full rotation: -175° (hard left-down) through 0° (right) up to 175° (left-up).
-          // Clamped to ±175 so the ball can never be aimed straight down into the ground.
+          // Clamp to upper semicircle only (5°–175°), so aiming stays above ground
           const raw = state.aimAngle + dAngle;
-          const newAngle = Math.max(-175, Math.min(175, raw));
+          const newAngle = Math.max(5, Math.min(175, raw));
           stateRef.current = { ...state, aimAngle: newAngle };
           state = stateRef.current;
         }
@@ -258,19 +280,29 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
           };
         } else if (inWater) {
           playWaterSound();
+          const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+          const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
+          const sugIdx = suggestClub(ydsLeft);
           stateRef.current = {
             ...state,
             ball,
             phase: 'aiming',
             currentStrokes: state.currentStrokes + 1,
             particles: newParticles,
+            selectedClubIndex: sugIdx,
+            aimAngle: CLUBS[sugIdx].launchAngle,
           };
         } else if (landed) {
+          const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+          const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
+          const sugIdx = suggestClub(ydsLeft);
           stateRef.current = {
             ...state,
             ball,
             phase: 'aiming',
             particles: newParticles,
+            selectedClubIndex: sugIdx,
+            aimAngle: CLUBS[sugIdx].launchAngle,
           };
         } else {
           const newPhase = ball.rolling ? 'rolling' : 'inFlight';
@@ -288,7 +320,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
       if (state.phase === 'holeIntro') {
         const newTimer = state.holeIntroTimer - 1;
         if (newTimer <= 0) {
-          stateRef.current = { ...state, phase: 'aiming', holeIntroTimer: 0 };
+          const introSugIdx = suggestClub(holeData.distance);
+          stateRef.current = { ...state, phase: 'aiming', holeIntroTimer: 0, selectedClubIndex: introSugIdx, aimAngle: CLUBS[introSugIdx].launchAngle };
           state = stateRef.current;
         } else {
           stateRef.current = { ...state, holeIntroTimer: newTimer };
@@ -307,7 +340,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
             state = stateRef.current;
           } else {
             // Next player's turn on same hole
-            const nextBall = { x: holeData.teeX, y: holeData.teeY - 10, vx: 0, vy: 0, inFlight: false, rolling: false, atRest: true, trail: [], lastSafeX: holeData.teeX, lastSafeY: holeData.teeY - 10, waterPenalty: false };
+            const nextBall = { x: holeData.teeX, y: holeData.teeY - 10, vx: 0, vy: 0, inFlight: false, rolling: false, atRest: true, trail: [], lastSafeX: holeData.teeX, lastSafeY: holeData.teeY - 10, waterPenalty: false, launchAngle: 0, spin: 0 };
+            const nextSugIdx = suggestClub(holeData.distance);
             stateRef.current = {
               ...state,
               currentPlayerIdx: nextPlayerIdx,
@@ -315,6 +349,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
               phase: 'aiming',
               currentStrokes: 0,
               holeSunkTimer: 0,
+              selectedClubIndex: nextSugIdx,
+              aimAngle: CLUBS[nextSugIdx].launchAngle,
             };
             state = stateRef.current;
           }
@@ -347,11 +383,19 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
       drawControls(ctx, state, width, height);
 
       if (state.phase === 'aiming' || state.phase === 'powering') {
+        drawClubCarousel(ctx, state.selectedClubIndex, width, height);
+        if (state.ball && state.holeData) {
+          drawYardageRuler(ctx, state.ball, state.holeData, width, height);
+        }
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
           : null;
         const renderPowerCap = ballSeg?.type === 'sand' ? 0.5 : 1.0;
         drawPowerMeter(ctx, state.power, state.phase === 'powering', width, height, renderPowerCap);
+      }
+
+      if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
+        drawYardageRuler(ctx, state.ball, state.holeData, width, height);
       }
 
       if (state.phase === 'holeIntro') {
