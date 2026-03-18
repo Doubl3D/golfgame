@@ -54,20 +54,22 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
       if (e.code === 'KeyQ' || e.code === 'ArrowUp') {
         const newIdx = Math.max(0, state.selectedClubIndex - 1);
         const newClub = CLUBS[newIdx];
+        const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
           ...state,
           selectedClubIndex: newIdx,
-          aimAngle: newClub.launchAngle,
+          aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle,
         };
         return;
       }
       if (e.code === 'KeyE' || e.code === 'ArrowDown') {
         const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
         const newClub = CLUBS[newIdx];
+        const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
           ...state,
           selectedClubIndex: newIdx,
-          aimAngle: newClub.launchAngle,
+          aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle,
         };
         return;
       }
@@ -86,6 +88,9 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         if (!s.ball || !s.holeData) return;
         const club = CLUBS[s.selectedClubIndex];
         const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
+        const ypp = s.holeData.distance / (s.holeData.holeX - s.holeData.teeX);
+        console.log('[LAUNCH]', club.name, 'power='+s.power.toFixed(2), 'angle='+s.aimAngle, 'vx='+newBall.vx.toFixed(1), 'vy='+newBall.vy.toFixed(1), 'ypp='+ypp.toFixed(4));
+        (window as any).__ballDebug = { startX: newBall.x, ypp, frames: 0, maxHeight: 0, teeY: s.holeData.terrain[Math.floor(s.ball.x)] };
         stateRef.current = {
           ...s,
           ball: newBall,
@@ -95,9 +100,10 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         };
       }
     } else if (state.phase === 'holeSunk' || state.phase === 'scorecard') {
-      if (e.code === 'Space' || e.code === 'Enter') {
-        advanceToNextHole();
-      }
+      advanceToNextHole();
+    } else if (state.phase === 'gameOver') {
+      stopAmbience();
+      onBackToMenu();
     }
   }, []);
 
@@ -105,12 +111,17 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
     keysRef.current.delete(e.code);
   }, []);
 
-  const handleClick = useCallback(() => {
+  const mouseDownRef = useRef<{ x: number; y: number; backward: boolean } | null>(null);
+  const mouseHeldRef = useRef(false);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     startAmbience();
+    mouseHeldRef.current = true;
     const state = stateRef.current;
     if (state.showScorecard) return;
 
     if (state.phase === 'aiming') {
+      mouseDownRef.current = { x: e.clientX, y: e.clientY, backward: state.aimAngle > 90 };
       stateRef.current = {
         ...state,
         phase: 'powering',
@@ -118,10 +129,48 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         powerDirection: 1,
         powerActive: true,
       };
-    } else if (state.phase === 'powering') {
+    } else if (state.phase === 'holeSunk' || state.phase === 'scorecard') {
+      advanceToNextHole();
+    } else if (state.phase === 'gameOver') {
+      stopAmbience();
+      onBackToMenu();
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const state = stateRef.current;
+    if (state.phase !== 'powering' || !mouseDownRef.current) return;
+
+    const dy = mouseDownRef.current.y - e.clientY;
+    const sensitivity = 3;
+    const clubAngle = CLUBS[state.selectedClubIndex].launchAngle;
+    // Detect if we started aimed backward (past the hole)
+    const aimingBackward = mouseDownRef.current.backward;
+    const baseAngle = aimingBackward ? 180 - clubAngle : clubAngle;
+    // When aimed backward, invert mouse: drag up = toward 90° (higher arc), drag down = toward 175° (flatter)
+    const direction = aimingBackward ? -1 : 1;
+    const angleOffset = (dy / sensitivity) * direction;
+    const newAngle = aimingBackward
+      ? Math.max(95, Math.min(175, baseAngle + angleOffset))
+      : Math.max(5, Math.min(85, baseAngle + angleOffset));
+
+    stateRef.current = { ...state, aimAngle: newAngle };
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    mouseHeldRef.current = false;
+    const state = stateRef.current;
+    if (state.phase === 'powering' && mouseDownRef.current) {
       const s = stateRef.current;
-      if (!s.ball || !s.holeData) return;
-      const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction);
+      if (!s.ball || !s.holeData) {
+        mouseDownRef.current = null;
+        return;
+      }
+      const club = CLUBS[s.selectedClubIndex];
+      const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
+      const ypp = s.holeData.distance / (s.holeData.holeX - s.holeData.teeX);
+      console.log('[LAUNCH]', club.name, 'power='+s.power.toFixed(2), 'angle='+s.aimAngle.toFixed(1), 'vx='+newBall.vx.toFixed(1), 'vy='+newBall.vy.toFixed(1), 'ypp='+ypp.toFixed(4));
+      (window as any).__ballDebug = { startX: newBall.x, ypp, frames: 0, maxHeight: 0, teeY: s.holeData.terrain[Math.floor(s.ball.x)] };
       stateRef.current = {
         ...s,
         ball: newBall,
@@ -129,6 +178,7 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         powerActive: false,
         currentStrokes: s.currentStrokes + 1,
       };
+      mouseDownRef.current = null;
     }
   }, []);
 
@@ -237,7 +287,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         let inHole = false;
         let inWater = false;
 
-        for (let step = 0; step < 1; step++) {
+        const simSpeed = mouseHeldRef.current ? 6 : 1;
+        for (let step = 0; step < simSpeed; step++) {
           const result = stepPhysics(ball, holeData.terrain, holeData.segments, holeData.holeX, holeData.holeY, state.wind.speed * state.wind.direction);
           ball = result.ball;
 
@@ -262,6 +313,22 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
 
         newParticles = updateParticles(newParticles);
 
+        // Debug: track ball flight
+        const dbg = (window as any).__ballDebug;
+        if (dbg) {
+          dbg.frames++;
+          const heightAboveTee = dbg.teeY - ball.y;
+          if (heightAboveTee > dbg.maxHeight) dbg.maxHeight = heightAboveTee;
+          if (ball.atRest || landed || inHole || inWater) {
+            const totalPx = Math.abs(ball.x - dbg.startX);
+            const totalYds = Math.round(totalPx * dbg.ypp);
+            console.log('[LANDED]', 'dist=' + totalYds + 'yds (' + Math.round(totalPx) + 'px)', 'maxHeight=' + Math.round(dbg.maxHeight) + 'px', 'frames=' + dbg.frames, 'inFlight=' + ball.inFlight, 'rolling=' + ball.rolling, 'atRest=' + ball.atRest, 'finalVx=' + ball.vx.toFixed(1));
+            (window as any).__ballDebug = null;
+          } else if (dbg.frames <= 5 || dbg.frames % 30 === 0) {
+            console.log('[FLIGHT f' + dbg.frames + ']', 'x=' + Math.round(ball.x), 'y=' + Math.round(ball.y), 'vx=' + ball.vx.toFixed(1), 'vy=' + ball.vy.toFixed(1), 'inFlight=' + ball.inFlight, 'rolling=' + ball.rolling, 'heightAboveTee=' + Math.round(heightAboveTee));
+          }
+        }
+
         if (inHole) {
           // Record score
           playHoleSunkSound();
@@ -283,6 +350,8 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
           const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
           const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
           const sugIdx = suggestClub(ydsLeft);
+          const pastHole = ball.x > holeData.holeX;
+          const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
           stateRef.current = {
             ...state,
             ball,
@@ -290,19 +359,21 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
             currentStrokes: state.currentStrokes + 1,
             particles: newParticles,
             selectedClubIndex: sugIdx,
-            aimAngle: CLUBS[sugIdx].launchAngle,
+            aimAngle: sugAngle,
           };
         } else if (landed) {
           const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
           const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
           const sugIdx = suggestClub(ydsLeft);
+          const pastHole = ball.x > holeData.holeX;
+          const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
           stateRef.current = {
             ...state,
             ball,
             phase: 'aiming',
             particles: newParticles,
             selectedClubIndex: sugIdx,
-            aimAngle: CLUBS[sugIdx].launchAngle,
+            aimAngle: sugAngle,
           };
         } else {
           const newPhase = ball.rolling ? 'rolling' : 'inFlight';
@@ -396,6 +467,14 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
 
       if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
         drawYardageRuler(ctx, state.ball, state.holeData, width, height);
+        if (mouseHeldRef.current) {
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(width / 2 - 50, height - 40, 100, 24);
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = 'bold 12px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('⏩ 6x Speed', width / 2, height - 23);
+        }
       }
 
       if (state.phase === 'holeIntro') {
@@ -434,7 +513,10 @@ export default function GolfGame({ playerNames, totalHoles, onBackToMenu }: Golf
         ref={canvasRef}
         width={canvasSize.width}
         height={canvasSize.height}
-        onClick={handleClick}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
         className="block cursor-crosshair"
         style={{ touchAction: 'none' }}
       />

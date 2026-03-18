@@ -1030,9 +1030,26 @@ export function drawGameOver(
     ctx.fillText(`${i + 1}. ${entry.player.name}: ${entry.total} (${scoreStr})`, canvasWidth / 2, y);
   });
 
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '16px monospace';
-  ctx.fillText('Refresh page to play again', canvasWidth / 2, canvasHeight - 40);
+  // "Play Again" button area (rendered as canvas text, click handled in GolfGame.tsx)
+  const btnW = 220;
+  const btnH = 44;
+  const btnX = canvasWidth / 2 - btnW / 2;
+  const btnY = canvasHeight - 80;
+  ctx.fillStyle = 'rgba(22,101,52,0.9)';
+  roundRect(ctx, btnX, btnY, btnW, btnH, 10);
+  ctx.fill();
+  ctx.strokeStyle = '#4ade80';
+  ctx.lineWidth = 2;
+  roundRect(ctx, btnX, btnY, btnW, btnH, 10);
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PLAY AGAIN', canvasWidth / 2, btnY + 28);
+
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px monospace';
+  ctx.fillText('or press any key', canvasWidth / 2, btnY + btnH + 18);
 }
 
 export function drawControls(
@@ -1045,12 +1062,9 @@ export function drawControls(
   const playerIdx = state.currentPlayerIdx;
 
   if (state.phase === 'aiming') {
-    if (playerIdx === 0) lines.push('← → Aim  |  SPACE: Power');
-    else if (playerIdx === 1) lines.push('A D Aim  |  SPACE: Power');
-    else lines.push('SPACE: Power');
-    lines.push('Q/E or ↑/↓: Club  |  F: Scorecard');
+    lines.push('← → Aim  |  Q/E: Club  |  SPACE or LMB: Power');
   } else if (state.phase === 'powering') {
-    lines.push('SPACE: Launch!');
+    lines.push('Drag ↑↓ to aim  |  Release to launch!');
   }
 
   if (lines.length === 0) return;

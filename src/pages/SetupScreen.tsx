@@ -50,12 +50,13 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
 
       {/* Main card */}
       <div
-        className="relative z-10 flex flex-col items-center gap-6 px-8 py-8 rounded-2xl"
+        className="relative z-10 flex flex-col items-center gap-8 rounded-2xl"
         style={{
           background: 'rgba(10, 30, 10, 0.92)',
           border: '2px solid #4ade80',
-          minWidth: 340,
-          maxWidth: 480,
+          padding: '48px 48px',
+          minWidth: 420,
+          maxWidth: 540,
           boxShadow: '0 0 40px rgba(74,222,128,0.2)',
         }}
       >
@@ -74,14 +75,14 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
           <label style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>
             Players
           </label>
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-3 mt-2">
             {[1, 2, 3, 4].map((n) => (
               <button
                 key={n}
                 onClick={() => setNumPlayers(n)}
                 style={{
                   flex: 1,
-                  padding: '8px 0',
+                  padding: '10px 0',
                   borderRadius: 8,
                   border: `2px solid ${numPlayers === n ? '#4ade80' : 'rgba(255,255,255,0.1)'}`,
                   background: numPlayers === n ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.03)',
@@ -100,7 +101,7 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
         </div>
 
         {/* Player names */}
-        <div className="w-full flex flex-col gap-2">
+        <div className="w-full flex flex-col gap-3">
           <label style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>
             Player Names
           </label>
@@ -122,7 +123,7 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
                 maxLength={12}
                 style={{
                   flex: 1,
-                  padding: '7px 10px',
+                  padding: '9px 12px',
                   borderRadius: 8,
                   border: `1px solid rgba(255,255,255,0.15)`,
                   background: 'rgba(255,255,255,0.05)',
@@ -141,14 +142,14 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
           <label style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>
             Round Length
           </label>
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-3 mt-2">
             {[3, 9, 18].map((h) => (
               <button
                 key={h}
                 onClick={() => setTotalHoles(h)}
                 style={{
                   flex: 1,
-                  padding: '8px 0',
+                  padding: '10px 0',
                   borderRadius: 8,
                   border: `2px solid ${totalHoles === h ? '#4ade80' : 'rgba(255,255,255,0.1)'}`,
                   background: totalHoles === h ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.03)',
@@ -172,16 +173,16 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
             background: 'rgba(255,255,255,0.04)',
             border: '1px solid rgba(255,255,255,0.08)',
             borderRadius: 8,
-            padding: '10px 14px',
+            padding: '12px 16px',
             width: '100%',
           }}
         >
           <div style={{ color: '#64748b', fontSize: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>Controls</div>
-          <div style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', lineHeight: 1.8 }}>
-            <span style={{ color: '#fbbf24' }}>P1:</span> ← → Aim<br />
-            <span style={{ color: '#3b82f6' }}>P2:</span> A D Aim<br />
-            <span style={{ color: '#4ade80' }}>All:</span> SPACE = Power Meter / Launch<br />
-            <span style={{ color: '#4ade80' }}>F</span> = Toggle Scorecard
+          <div style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', lineHeight: 2 }}>
+            <span style={{ color: '#fbbf24' }}>← →</span> Aim &nbsp;|&nbsp; <span style={{ color: '#fbbf24' }}>Q E</span> Club Select<br />
+            <span style={{ color: '#4ade80' }}>SPACE</span> Power &amp; Launch<br />
+            <span style={{ color: '#4ade80' }}>LMB Hold</span> Power + Drag to Aim<br />
+            <span style={{ color: '#64748b' }}>F</span> Scorecard
           </div>
         </div>
 
