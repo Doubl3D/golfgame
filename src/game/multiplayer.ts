@@ -105,6 +105,13 @@ export function applySerializedState(current: GameState, s: SerializedState): Ga
 
 const PEER_PREFIX = 'golfgame-';
 
+// Local PeerJS server config — falls back to cloud if local server isn't running
+const PEER_SERVER_CONFIG = {
+  host: window.location.hostname,
+  port: 9000,
+  path: '/myapp',
+};
+
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1 to avoid confusion
   let code = '';
@@ -123,7 +130,7 @@ export function createHostSession(): Promise<{
     const joinCode = generateJoinCode();
     const peerId = PEER_PREFIX + joinCode;
 
-    const peer = new Peer(peerId);
+    const peer = new Peer(peerId, PEER_SERVER_CONFIG);
 
     peer.on('open', () => {
       const waitForGuest = (): Promise<MultiplayerConnection> => {
@@ -169,7 +176,7 @@ export function createHostSession(): Promise<{
 
 export function joinSession(joinCode: string): Promise<MultiplayerConnection> {
   return new Promise((resolve, reject) => {
-    const peer = new Peer();
+    const peer = new Peer(PEER_SERVER_CONFIG);
 
     peer.on('open', () => {
       const conn = peer.connect(PEER_PREFIX + joinCode.toUpperCase());

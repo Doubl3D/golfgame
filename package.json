@@ -72,6 +72,7 @@
     "zod": "^3.0.0"
   },
   "dependencies": {
+    "peer": "^1.0.2",
     "peerjs": "^1.5.5"
   }
 }
