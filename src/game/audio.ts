@@ -149,14 +149,142 @@ export function stopAmbience() {
   }
 }
 
+export function playSwingSound() {
+  const audioCtx = getCtx();
+  const dest = masterGain ?? audioCtx.destination;
+  const now = audioCtx.currentTime;
+
+  // Whoosh: filtered noise sweep (the swing through air)
+  const whooshLen = 0.15;
+  const whooshBuf = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * whooshLen), audioCtx.sampleRate);
+  const whooshData = whooshBuf.getChannelData(0);
+  for (let i = 0; i < whooshData.length; i++) whooshData[i] = Math.random() * 2 - 1;
+  const whooshSrc = audioCtx.createBufferSource();
+  whooshSrc.buffer = whooshBuf;
+  const whooshFilter = audioCtx.createBiquadFilter();
+  whooshFilter.type = 'bandpass';
+  whooshFilter.frequency.setValueAtTime(600, now);
+  whooshFilter.frequency.linearRampToValueAtTime(2000, now + whooshLen);
+  whooshFilter.Q.value = 2;
+  const whooshGain = audioCtx.createGain();
+  whooshGain.gain.setValueAtTime(0, now);
+  whooshGain.gain.linearRampToValueAtTime(0.6, now + 0.03);
+  whooshGain.gain.linearRampToValueAtTime(0, now + whooshLen);
+  whooshSrc.connect(whooshFilter);
+  whooshFilter.connect(whooshGain);
+  whooshGain.connect(dest);
+  whooshSrc.start(now);
+  whooshSrc.stop(now + whooshLen);
+
+  // Impact: sharp click/crack (club face hitting ball)
+  const impactTime = now + 0.06;
+  const impactOsc = audioCtx.createOscillator();
+  impactOsc.type = 'square';
+  impactOsc.frequency.setValueAtTime(3200, impactTime);
+  impactOsc.frequency.exponentialRampToValueAtTime(800, impactTime + 0.02);
+  const impactGain = audioCtx.createGain();
+  impactGain.gain.setValueAtTime(0.8, impactTime);
+  impactGain.gain.exponentialRampToValueAtTime(0.001, impactTime + 0.06);
+  impactOsc.connect(impactGain);
+  impactGain.connect(dest);
+  impactOsc.start(impactTime);
+  impactOsc.stop(impactTime + 0.07);
+
+  // Low thump (satisfying weight)
+  const thumpOsc = audioCtx.createOscillator();
+  thumpOsc.type = 'sine';
+  thumpOsc.frequency.setValueAtTime(150, impactTime);
+  thumpOsc.frequency.exponentialRampToValueAtTime(60, impactTime + 0.08);
+  const thumpGain = audioCtx.createGain();
+  thumpGain.gain.setValueAtTime(0.5, impactTime);
+  thumpGain.gain.exponentialRampToValueAtTime(0.001, impactTime + 0.1);
+  thumpOsc.connect(thumpGain);
+  thumpGain.connect(dest);
+  thumpOsc.start(impactTime);
+  thumpOsc.stop(impactTime + 0.12);
+}
+
+export function playPutterSound() {
+  const audioCtx = getCtx();
+  const dest = masterGain ?? audioCtx.destination;
+  const now = audioCtx.currentTime;
+
+  // Soft tap: gentle high click
+  const tapOsc = audioCtx.createOscillator();
+  tapOsc.type = 'sine';
+  tapOsc.frequency.setValueAtTime(2200, now);
+  tapOsc.frequency.exponentialRampToValueAtTime(1200, now + 0.04);
+  const tapGain = audioCtx.createGain();
+  tapGain.gain.setValueAtTime(0.45, now);
+  tapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+  tapOsc.connect(tapGain);
+  tapGain.connect(dest);
+  tapOsc.start(now);
+  tapOsc.stop(now + 0.1);
+
+  // Soft metallic ring (putter face resonance)
+  const ringOsc = audioCtx.createOscillator();
+  ringOsc.type = 'sine';
+  ringOsc.frequency.setValueAtTime(4400, now);
+  const ringGain = audioCtx.createGain();
+  ringGain.gain.setValueAtTime(0.12, now);
+  ringGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+  ringOsc.connect(ringGain);
+  ringGain.connect(dest);
+  ringOsc.start(now);
+  ringOsc.stop(now + 0.3);
+}
+
 export function playHoleSunkSound() {
   const audioCtx = getCtx();
   const dest = masterGain ?? audioCtx.destination;
   const now = audioCtx.currentTime;
-  // Short ascending fanfare
-  const notes = [523, 659, 784, 1047];
-  notes.forEach((freq, i) => {
-    chirp(audioCtx, dest, now + i * 0.12, freq, 50, 0.15, 0.5);
+
+  // Ball rattling into cup — quick descending rattle
+  for (let i = 0; i < 4; i++) {
+    const rattleOsc = audioCtx.createOscillator();
+    rattleOsc.type = 'triangle';
+    const t = now + i * 0.035;
+    rattleOsc.frequency.setValueAtTime(3000 - i * 400, t);
+    rattleOsc.frequency.exponentialRampToValueAtTime(800, t + 0.03);
+    const rattleGain = audioCtx.createGain();
+    rattleGain.gain.setValueAtTime(0.35, t);
+    rattleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+    rattleOsc.connect(rattleGain);
+    rattleGain.connect(dest);
+    rattleOsc.start(t);
+    rattleOsc.stop(t + 0.05);
+  }
+
+  // Hollow cup thunk
+  const cupTime = now + 0.15;
+  const cupOsc = audioCtx.createOscillator();
+  cupOsc.type = 'sine';
+  cupOsc.frequency.setValueAtTime(220, cupTime);
+  cupOsc.frequency.exponentialRampToValueAtTime(120, cupTime + 0.12);
+  const cupGain = audioCtx.createGain();
+  cupGain.gain.setValueAtTime(0.5, cupTime);
+  cupGain.gain.exponentialRampToValueAtTime(0.001, cupTime + 0.2);
+  cupOsc.connect(cupGain);
+  cupGain.connect(dest);
+  cupOsc.start(cupTime);
+  cupOsc.stop(cupTime + 0.25);
+
+  // Celebratory ascending chime
+  const chimeStart = now + 0.3;
+  const chimeNotes = [523, 659, 784, 1047, 1319];
+  chimeNotes.forEach((freq, i) => {
+    const t = chimeStart + i * 0.08;
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, t);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    osc.connect(g);
+    g.connect(dest);
+    osc.start(t);
+    osc.stop(t + 0.35);
   });
 }
 

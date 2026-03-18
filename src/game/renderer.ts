@@ -193,32 +193,50 @@ export function drawForeground(
   w: number,
   h: number,
   cameraX: number,
-  terrainSurface: number // approximate y of terrain near camera
+  terrain: number[],
+  segments: import('./terrain').TerrainSegment[]
 ) {
-  // === PARALLAX FOREGROUND: dark grass tufts that scroll faster than world ===
-  const fx = cameraX * 1.25;
+  // === GRASS TUFTS: decorative clumps anchored to terrain surface ===
   ctx.save();
-  ctx.globalAlpha = 0.7;
+  ctx.globalAlpha = 0.8;
 
-  const tuftSpacing = 120;
-  const tuftCount = Math.ceil(w / tuftSpacing) + 4;
-  const tuftOffset = (-fx) % tuftSpacing;
+  const startX = Math.max(0, Math.floor(cameraX));
+  const endX = Math.min(terrain.length - 1, Math.floor(cameraX + w));
+  const tuftSpacing = 24;
 
-  for (let i = -2; i < tuftCount; i++) {
-    const tx = tuftOffset + i * tuftSpacing + (i % 3) * 18;
-    const ty = terrainSurface - 4;
+  // Use a seeded pattern so tufts are stable as camera scrolls
+  for (let wx = startX - (startX % tuftSpacing); wx < endX + tuftSpacing; wx += tuftSpacing) {
+    if (wx < 0 || wx >= terrain.length) continue;
 
-    ctx.strokeStyle = '#1a4d1a';
-    ctx.lineWidth = 1.5;
+    // Pseudo-random offset per tuft so they don't look gridded
+    const hash = ((wx * 2654435761) >>> 0) % 1000;
+    const offsetX = (hash % 16) - 8;
+    const worldX = wx + offsetX;
+    if (worldX < 0 || worldX >= terrain.length) continue;
 
-    // 3-4 blades per tuft
-    for (let b = -2; b <= 2; b++) {
-      const bx = tx + b * 5;
-      const blen = 10 + Math.abs(b) * 2;
-      const curve = b * 3;
+    // Check segment — only draw on grass surfaces
+    const seg = segments.find(s => worldX >= s.startX && worldX < s.endX);
+    if (!seg || seg.type === 'water' || seg.type === 'sand') continue;
+
+    const screenX = worldX - cameraX;
+    const surfaceY = terrain[Math.floor(worldX)];
+
+    // Short stubby grass — thicker strokes, less height
+    const baseHeight = seg.type === 'rough' ? 7 : seg.type === 'fairway' ? 5 : seg.type === 'fringe' ? 4 : 3;
+    const tint = seg.type === 'rough' ? '#1a5c1a' : '#1a4d1a';
+
+    ctx.strokeStyle = tint;
+    ctx.lineWidth = 2;
+
+    // Dense cluster of short blades
+    const bladeCount = seg.type === 'rough' ? 4 : 3;
+    for (let b = -bladeCount; b <= bladeCount; b++) {
+      const bx = screenX + b * 3;
+      const blen = baseHeight + (hash % 3);
+      const curve = b * 1.5;
       ctx.beginPath();
-      ctx.moveTo(bx, ty);
-      ctx.quadraticCurveTo(bx + curve, ty - blen * 0.6, bx + curve * 0.5, ty - blen);
+      ctx.moveTo(bx, surfaceY);
+      ctx.lineTo(bx + curve * 0.5, surfaceY - blen);
       ctx.stroke();
     }
   }
@@ -574,70 +592,43 @@ export function drawClubCarousel(
   canvasHeight: number
 ) {
   const club = CLUBS[selectedIndex];
-  const cx = canvasWidth / 2;
-  const cy = canvasHeight - 148;
+  const size = 72;
+  const x = 16;
+  const y = canvasHeight - size - 16;
 
-  // How many neighbors to show on each side
-  const visible = 2;
-
-  // Background pill
-  const bgW = 300;
-  const bgH = 36;
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  roundRect(ctx, cx - bgW / 2, cy - bgH / 2, bgW, bgH, 10);
+  // Square background
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  roundRect(ctx, x, y, size, size, 10);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.lineWidth = 1;
-  roundRect(ctx, cx - bgW / 2, cy - bgH / 2, bgW, bgH, 10);
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = 2;
+  roundRect(ctx, x, y, size, size, 10);
   ctx.stroke();
 
-  // Draw neighboring clubs fading out
-  for (let offset = -visible; offset <= visible; offset++) {
-    const idx = selectedIndex + offset;
-    if (idx < 0 || idx >= CLUBS.length) continue;
-
-    const c = CLUBS[idx];
-    const xOff = offset * 58;
-    const isSelected = offset === 0;
-
-    // Opacity fades with distance
-    const alpha = isSelected ? 1.0 : Math.max(0.2, 1 - Math.abs(offset) * 0.35);
-    ctx.globalAlpha = alpha;
-
-    if (isSelected) {
-      // Highlight box behind selected club
-      ctx.fillStyle = 'rgba(34,197,94,0.25)';
-      roundRect(ctx, cx + xOff - 26, cy - 15, 52, 30, 6);
-      ctx.fill();
-      ctx.strokeStyle = '#22c55e';
-      ctx.lineWidth = 2;
-      roundRect(ctx, cx + xOff - 26, cy - 15, 52, 30, 6);
-      ctx.stroke();
-    }
-
-    // Club short name
-    ctx.fillStyle = isSelected ? '#ffffff' : '#94a3b8';
-    ctx.font = isSelected ? 'bold 14px monospace' : '11px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(c.shortName, cx + xOff, cy + 4);
-  }
-
-  ctx.globalAlpha = 1.0;
-
-  // Arrows on sides
-  ctx.fillStyle = selectedIndex > 0 ? '#94a3b8' : '#333';
-  ctx.font = '16px monospace';
+  // Club short name (big)
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 22px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('◀', cx - bgW / 2 + 14, cy + 5);
+  ctx.fillText(club.shortName, x + size / 2, y + 32);
+
+  // Range below name
+  ctx.fillStyle = '#4ade80';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(`${club.maxRange}y`, x + size / 2, y + 50);
+
+  // Up/down arrows
+  ctx.fillStyle = selectedIndex > 0 ? '#94a3b8' : '#333';
+  ctx.font = '10px monospace';
+  ctx.fillText('▲ Q', x + size / 2, y + 66);
 
   ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? '#94a3b8' : '#333';
-  ctx.fillText('▶', cx + bgW / 2 - 14, cy + 5);
+  ctx.fillText('▼ E', x + size / 2, y - 4);
 
-  // Club name + range below
-  ctx.fillStyle = '#b0b0b0';
-  ctx.font = '10px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(`${club.name} · ${club.maxRange} yds`, cx, cy + bgH / 2 + 12);
+  // Club full name to the right
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(club.name, x + size + 10, y + size / 2 + 4);
 }
 
 export function drawYardageRuler(
@@ -807,44 +798,123 @@ export function drawHoleIntro(
   holeNumber: number,
   canvasWidth: number,
   canvasHeight: number,
-  alpha: number
+  alpha: number,
+  camera: Camera,
+  progress: number // 0 = start (at pin), 1 = end (at tee)
 ) {
   ctx.save();
-  ctx.globalAlpha = alpha;
 
-  // Dark overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  // Subtle dark gradient at top for readability
+  const topGrad = ctx.createLinearGradient(0, 0, 0, 100);
+  topGrad.addColorStop(0, 'rgba(0,0,0,0.6)');
+  topGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = topGrad;
+  ctx.fillRect(0, 0, canvasWidth, 100);
 
-  // Card
-  const cw = 380, ch = 200;
-  const cx = canvasWidth / 2 - cw / 2;
-  const cy = canvasHeight / 2 - ch / 2;
+  // Hole info banner at top center
+  ctx.globalAlpha = Math.min(1, alpha);
 
-  ctx.fillStyle = 'rgba(15,30,15,0.95)';
-  roundRect(ctx, cx, cy, cw, ch, 12);
+  const bannerW = 280;
+  const bannerH = 60;
+  const bx = canvasWidth / 2 - bannerW / 2;
+  const by = 12;
+
+  ctx.fillStyle = 'rgba(10,25,10,0.85)';
+  roundRect(ctx, bx, by, bannerW, bannerH, 10);
   ctx.fill();
   ctx.strokeStyle = '#4ade80';
   ctx.lineWidth = 2;
-  roundRect(ctx, cx, cy, cw, ch, 12);
+  roundRect(ctx, bx, by, bannerW, bannerH, 10);
   ctx.stroke();
 
   ctx.fillStyle = '#4ade80';
-  ctx.font = 'bold 14px monospace';
+  ctx.font = 'bold 22px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('HOLE', canvasWidth / 2, cy + 35);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 72px monospace';
-  ctx.fillText(`${holeNumber}`, canvasWidth / 2, cy + 110);
+  ctx.fillText(`HOLE ${holeNumber}`, canvasWidth / 2, by + 28);
 
   ctx.fillStyle = '#94a3b8';
-  ctx.font = '16px monospace';
-  ctx.fillText(`Par ${holeData.par}  •  ${holeData.distance} yards`, canvasWidth / 2, cy + 145);
+  ctx.font = '14px monospace';
+  ctx.fillText(`Par ${holeData.par}  •  ${holeData.distance} yds`, canvasWidth / 2, by + 50);
 
-  ctx.fillStyle = '#4ade80';
-  ctx.font = '13px monospace';
-  ctx.fillText('Get ready...', canvasWidth / 2, cy + 175);
+  // === DISTANCE RULER along the bottom ===
+  const rulerH = 32;
+  const rulerY = canvasHeight - rulerH - 8;
+
+  // Background bar
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, rulerY - 4, canvasWidth, rulerH + 12);
+  ctx.globalAlpha = 1;
+
+  const yardsPerPixel = holeData.distance / (holeData.holeX - holeData.teeX);
+
+  // Draw tick marks and yard labels for visible area
+  const startWorldX = Math.max(holeData.teeX, Math.floor(camera.x));
+  const endWorldX = Math.min(holeData.holeX, Math.ceil(camera.x + canvasWidth));
+
+  // Yard values visible on screen
+  const startYards = Math.max(0, Math.floor((startWorldX - holeData.teeX) * yardsPerPixel));
+  const endYards = Math.ceil((endWorldX - holeData.teeX) * yardsPerPixel);
+
+  // Choose tick spacing based on total distance
+  const tickSpacingYards = holeData.distance > 400 ? 50 : 25;
+
+  ctx.textAlign = 'center';
+
+  for (let yd = 0; yd <= holeData.distance; yd += tickSpacingYards) {
+    const worldX = holeData.teeX + yd / yardsPerPixel;
+    const screenX = worldX - camera.x;
+
+    if (screenX < -20 || screenX > canvasWidth + 20) continue;
+
+    const isMajor = yd % (tickSpacingYards * 2) === 0 || yd === 0;
+
+    // Tick line
+    ctx.strokeStyle = isMajor ? 'rgba(74,222,128,0.6)' : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = isMajor ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(screenX, rulerY);
+    ctx.lineTo(screenX, rulerY + (isMajor ? 16 : 10));
+    ctx.stroke();
+
+    // Yard label on major ticks
+    if (isMajor) {
+      ctx.fillStyle = '#4ade80';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(`${yd}`, screenX, rulerY + 28);
+    }
+  }
+
+  // Pin marker
+  const pinScreenX = holeData.holeX - camera.x;
+  if (pinScreenX > -20 && pinScreenX < canvasWidth + 20) {
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('⛳', pinScreenX, rulerY + 28);
+
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pinScreenX, rulerY);
+    ctx.lineTo(pinScreenX, rulerY + 16);
+    ctx.stroke();
+  }
+
+  // Tee marker
+  const teeScreenX = holeData.teeX - camera.x;
+  if (teeScreenX > -20 && teeScreenX < canvasWidth + 20) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('TEE', teeScreenX, rulerY + 28);
+  }
+
+  // Baseline
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, rulerY);
+  ctx.lineTo(canvasWidth, rulerY);
+  ctx.stroke();
 
   ctx.restore();
 }
@@ -880,11 +950,17 @@ export function drawScorecard(
   ctx.font = '12px monospace';
   ctx.fillText('Press F to close', canvasWidth / 2, cy + 50);
 
-  const cols = state.totalHoles + 2;
-  const colW = Math.min((cardW - 40) / cols, 50);
-  const rowH = 30;
+  const nameColW = 80;
+  const totColW = 40;
+  const holeAreaW = cardW - 40 - nameColW - totColW;
+  const colW = Math.min(holeAreaW / state.totalHoles, 40);
+  const rowH = 28;
   const tableX = cx + 20;
   const tableY = cy + 65;
+
+  // Helper: x position for hole column center
+  const holeX = (h: number) => tableX + nameColW + h * colW + colW / 2;
+  const totX = tableX + nameColW + state.totalHoles * colW + totColW / 2;
 
   // Header row
   ctx.fillStyle = '#1e3320';
@@ -893,51 +969,67 @@ export function drawScorecard(
   ctx.fillStyle = '#94a3b8';
   ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText('Player', tableX + 5, tableY + 20);
+  ctx.fillText('Player', tableX + 5, tableY + 19);
 
-  for (let h = 1; h <= state.totalHoles; h++) {
-    ctx.textAlign = 'center';
-    ctx.fillText(`${h}`, tableX + state.players.length > 0 ? 80 + (h - 1) * colW + colW / 2 : 80, tableY + 20);
-  }
   ctx.textAlign = 'center';
-  ctx.fillText('TOT', tableX + 80 + state.totalHoles * colW + colW / 2, tableY + 20);
+  for (let h = 0; h < state.totalHoles; h++) {
+    ctx.fillText(`${h + 1}`, holeX(h), tableY + 19);
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('TOT', totX, tableY + 19);
+
+  // Par row
+  const parY = tableY + rowH;
+  ctx.fillStyle = 'rgba(34,197,94,0.08)';
+  ctx.fillRect(tableX, parY, cardW - 40, rowH);
+  ctx.fillStyle = '#4ade80';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Par', tableX + 5, parY + 19);
+  ctx.textAlign = 'center';
+  let totalPar = 0;
+  for (let h = 0; h < state.totalHoles; h++) {
+    const par = state.allHoleData[h]?.par ?? 4;
+    totalPar += par;
+    ctx.fillText(`${par}`, holeX(h), parY + 19);
+  }
+  ctx.fillText(`${totalPar}`, totX, parY + 19);
 
   // Player rows
   state.players.forEach((player, pi) => {
-    const ry = tableY + (pi + 1) * rowH;
+    const ry = parY + (pi + 1) * rowH;
     ctx.fillStyle = pi % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'transparent';
     ctx.fillRect(tableX, ry, cardW - 40, rowH);
 
     ctx.fillStyle = player.color;
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(player.name, tableX + 5, ry + 20);
+    ctx.fillText(player.name, tableX + 5, ry + 19);
 
     let total = 0;
+    ctx.font = '12px monospace';
     for (let h = 0; h < state.totalHoles; h++) {
       const strokes = player.scores[h] ?? 0;
       total += strokes;
-      const hx = tableX + 80 + h * colW + colW / 2;
       ctx.textAlign = 'center';
 
       if (strokes === 0) {
         ctx.fillStyle = '#334155';
-        ctx.fillText('-', hx, ry + 20);
+        ctx.fillText('-', holeX(h), ry + 19);
       } else {
-        // Color code
-        const holePar = 4; // approximate
-        const diff = strokes - holePar;
+        const par = state.allHoleData[h]?.par ?? 4;
+        const diff = strokes - par;
         if (diff < 0) ctx.fillStyle = '#fbbf24';
         else if (diff === 0) ctx.fillStyle = '#22c55e';
         else ctx.fillStyle = '#ef4444';
-        ctx.fillText(`${strokes}`, hx, ry + 20);
+        ctx.fillText(`${strokes}`, holeX(h), ry + 19);
       }
     }
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`${total}`, tableX + 80 + state.totalHoles * colW + colW / 2, ry + 20);
+    ctx.fillText(`${total}`, totX, ry + 19);
   });
 }
 

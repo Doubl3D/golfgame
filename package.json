@@ -70,5 +70,8 @@
     "vite": "^6.0.0",
     "wouter": "^3.3.5",
     "zod": "^3.0.0"
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
   }
 }

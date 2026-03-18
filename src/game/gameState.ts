@@ -128,7 +128,7 @@ export function startHole(state: GameState): GameState {
     powerDirection: 1,
     powerActive: false,
     currentStrokes: 0,
-    holeIntroTimer: 180,
+    holeIntroTimer: 270,
     wind: randomWind(),
     particles: [],
     lastShotResult: '',
