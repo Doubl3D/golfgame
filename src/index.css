@@ -6,8 +6,38 @@
   box-sizing: border-box;
 }
 
-body {
+html, body, #root {
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   background: #000;
   font-family: monospace;
+  /* Prevent iOS overscroll/bounce */
+  position: fixed;
+  touch-action: none;
+  -webkit-overflow-scrolling: touch;
+  /* Prevent mobile long-press context menu / text selection / image save */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+canvas {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Hide Safari toolbar area */
+body {
+  min-height: 100dvh;
+}
+
+/* Force landscape overlay for portrait mobile */
+@media screen and (orientation: portrait) and (max-width: 900px) {
+  .rotate-prompt {
+    display: flex !important;
+  }
 }

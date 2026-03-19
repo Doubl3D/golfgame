@@ -3,6 +3,11 @@ import { Ball } from './physics';
 import { GameState, Particle } from './gameState';
 import { Club, CLUBS } from './clubs';
 
+/** UI scale factor — 1.0 at 800px height, scales down for small screens, up for large */
+export function uiScale(canvasHeight: number): number {
+  return Math.max(0.55, Math.min(1.2, canvasHeight / 800));
+}
+
 export interface Camera {
   x: number; // world x at left edge of screen
   y: number;
@@ -78,29 +83,34 @@ export function drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, cam
   ctx.save();
   ctx.globalAlpha = 0.70;
   ctx.fillStyle = '#2e6b2e';
-  const treeBaseY = h * 0.80;
+  const treeBaseY = h * 0.85;
   const treeSpacing = 55;
-  const treeCount = Math.ceil(w / treeSpacing) + 6;
-  // Use floor to prevent sub-pixel jitter during camera pans
-  const treeOffset = Math.floor(((-tx2) % treeSpacing + treeSpacing) % treeSpacing);
-  for (let i = -3; i < treeCount; i++) {
-    const tbx = treeOffset + i * treeSpacing + (((i * 17) % 7) - 3) * 6;
-    const treeH = 60 + (((i * 13 + 7) % 5)) * 14;
+  // Calculate which world-space tree slots are visible
+  const firstSlot = Math.floor((tx2 - treeSpacing * 3) / treeSpacing);
+  const lastSlot = Math.ceil((tx2 + w + treeSpacing * 3) / treeSpacing);
+  for (let slot = firstSlot; slot <= lastSlot; slot++) {
+    // Use slot (world position) for stable pseudo-random offset
+    const hash = ((slot * 2654435761) >>> 0);
+    const jitter = ((hash % 13) - 6) * 5;
+    const worldX = slot * treeSpacing + jitter;
+    const screenX = worldX - tx2;
+    if (screenX < -80 || screenX > w + 80) continue;
+    const treeH = 60 + ((hash >> 8) % 5) * 14;
     const treeW = treeH * 0.55;
     // Three stacked triangles for a pine silhouette
     for (let tier = 0; tier < 3; tier++) {
       const tierTop = treeBaseY - treeH + tier * treeH * 0.32;
       const tierW   = treeW * (1 - tier * 0.22);
       ctx.beginPath();
-      ctx.moveTo(tbx, tierTop);
-      ctx.lineTo(tbx + tierW / 2, treeBaseY - treeH * 0.28 + tier * treeH * 0.32);
-      ctx.lineTo(tbx - tierW / 2, treeBaseY - treeH * 0.28 + tier * treeH * 0.32);
+      ctx.moveTo(screenX, tierTop);
+      ctx.lineTo(screenX + tierW / 2, treeBaseY - treeH * 0.28 + tier * treeH * 0.32);
+      ctx.lineTo(screenX - tierW / 2, treeBaseY - treeH * 0.28 + tier * treeH * 0.32);
       ctx.closePath();
       ctx.fill();
     }
     // Trunk
     ctx.fillStyle = '#3d2b1a';
-    ctx.fillRect(tbx - 3, treeBaseY - treeH * 0.20, 6, treeH * 0.20);
+    ctx.fillRect(screenX - 3, treeBaseY - treeH * 0.20, 6, treeH * 0.20);
     ctx.fillStyle = '#2e6b2e';
   }
   ctx.restore();
@@ -117,9 +127,9 @@ export function drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, cam
   ctx.moveTo(hillOffset - hillW * 2, h);
   for (let i = -2; i < hillCount; i++) {
     const hcx = hillOffset + i * hillW - hillW * 2;
-    const hcy = h * 0.80 - Math.sin(i * 1.1 + 0.7) * h * 0.12 - Math.sin(i * 2.3) * h * 0.05;
-    ctx.quadraticCurveTo(hcx,            h * 0.86, hcx + hillW / 2, hcy);
-    ctx.quadraticCurveTo(hcx + hillW,    h * 0.86, hcx + hillW * 1.5, hcy + h * 0.04);
+    const hcy = h * 0.88 - Math.sin(i * 1.1 + 0.7) * h * 0.08 - Math.sin(i * 2.3) * h * 0.03;
+    ctx.quadraticCurveTo(hcx,            h * 0.92, hcx + hillW / 2, hcy);
+    ctx.quadraticCurveTo(hcx + hillW,    h * 0.92, hcx + hillW * 1.5, hcy + h * 0.03);
   }
   ctx.lineTo(w + 200, h);
   ctx.closePath();
@@ -543,30 +553,33 @@ export function drawParticles(
 export function drawHUD(
   ctx: CanvasRenderingContext2D,
   state: GameState,
-  canvasWidth: number
+  canvasWidth: number,
+  canvasHeight?: number
 ) {
   const player = state.players[state.currentPlayerIdx];
   if (!player || !state.holeData) return;
 
+  const s = uiScale(canvasHeight ?? 800);
+  const m = Math.round; // shorthand for rounding
+
   // Background panel
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  roundRect(ctx, 10, 10, 220, 90, 8);
+  roundRect(ctx, m(6*s), m(6*s), m(200*s), m(76*s), m(6*s));
   ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.2)';
   ctx.lineWidth = 1;
-  roundRect(ctx, 10, 10, 220, 90, 8);
+  roundRect(ctx, m(6*s), m(6*s), m(200*s), m(76*s), m(6*s));
   ctx.stroke();
 
   ctx.textAlign = 'left';
   ctx.fillStyle = player.color;
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(player.name, 20, 32);
+  ctx.font = `bold ${m(14*s)}px monospace`;
+  ctx.fillText(player.name, m(14*s), m(24*s));
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = '12px monospace';
-  ctx.fillText(`Hole ${state.currentHole}/${state.totalHoles}  Par ${state.holeData.par}`, 20, 50);
-  ctx.fillText(`Strokes: ${state.currentStrokes}`, 20, 66);
-  // Live remaining distance
+  ctx.font = `${m(11*s)}px monospace`;
+  ctx.fillText(`Hole ${state.currentHole}/${state.totalHoles}  Par ${state.holeData.par}`, m(14*s), m(40*s));
+  ctx.fillText(`Strokes: ${state.currentStrokes}`, m(14*s), m(54*s));
   let distLabel = `Dist: ${state.holeData.distance} yds`;
   if (state.ball) {
     const pxDist = Math.abs(state.holeData.holeX - state.ball.x);
@@ -574,42 +587,43 @@ export function drawHUD(
     const remaining = Math.max(0, Math.round(pxDist * ypp));
     distLabel = `Dist: ${remaining} yds`;
   }
-  ctx.fillText(distLabel, 20, 82);
+  ctx.fillText(distLabel, m(14*s), m(68*s));
 
   // Wind indicator
-  const windX = canvasWidth - 160;
+  const windW = m(130*s);
+  const windH = m(42*s);
+  const windX = canvasWidth - windW - m(10*s);
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  roundRect(ctx, windX, 10, 150, 50, 8);
+  roundRect(ctx, windX, m(6*s), windW, windH, m(6*s));
   ctx.fill();
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 12px monospace';
+  ctx.font = `bold ${m(11*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText('WIND', windX + 75, 28);
+  ctx.fillText('WIND', windX + windW/2, m(20*s));
 
   const arrowDir = state.wind.direction;
-  const arrowLen = Math.min(50, state.wind.speed * 6);
+  const arrowLen = Math.min(m(40*s), state.wind.speed * m(5*s));
   ctx.strokeStyle = '#fbbf24';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = m(2*s);
   ctx.beginPath();
-  ctx.moveTo(windX + 75 - arrowLen / 2, 42);
-  ctx.lineTo(windX + 75 + arrowLen / 2 * arrowDir, 42);
+  ctx.moveTo(windX + windW/2 - arrowLen/2, m(33*s));
+  ctx.lineTo(windX + windW/2 + arrowLen/2 * arrowDir, m(33*s));
   ctx.stroke();
 
-  // Arrowhead
-  const ax = windX + 75 + arrowLen / 2 * arrowDir;
+  const ax = windX + windW/2 + arrowLen/2 * arrowDir;
   ctx.beginPath();
-  ctx.moveTo(ax, 42);
-  ctx.lineTo(ax - 6 * arrowDir, 37);
-  ctx.lineTo(ax - 6 * arrowDir, 47);
+  ctx.moveTo(ax, m(33*s));
+  ctx.lineTo(ax - m(5*s) * arrowDir, m(28*s));
+  ctx.lineTo(ax - m(5*s) * arrowDir, m(38*s));
   ctx.closePath();
   ctx.fillStyle = '#fbbf24';
   ctx.fill();
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = '11px monospace';
+  ctx.font = `${m(9*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(state.wind.label, windX + 75, 56);
+  ctx.fillText(state.wind.label, windX + windW/2, m(46*s));
 }
 
 export function drawClubCarousel(
@@ -618,44 +632,46 @@ export function drawClubCarousel(
   canvasWidth: number,
   canvasHeight: number
 ) {
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
   const club = CLUBS[selectedIndex];
-  const size = 72;
-  const x = 16;
-  const y = canvasHeight - size - 16;
+  const size = m(56 * s);
+  const x = m(12 * s);
+  const y = canvasHeight - m(120 * s);
 
   // Square background
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  roundRect(ctx, x, y, size, size, 10);
+  roundRect(ctx, x, y, size, size, m(8*s));
   ctx.fill();
   ctx.strokeStyle = '#22c55e';
-  ctx.lineWidth = 2;
-  roundRect(ctx, x, y, size, size, 10);
+  ctx.lineWidth = m(2*s);
+  roundRect(ctx, x, y, size, size, m(8*s));
   ctx.stroke();
 
-  // Club short name (big)
+  // Club short name
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 22px monospace';
+  ctx.font = `bold ${m(18*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(club.shortName, x + size / 2, y + 32);
+  ctx.fillText(club.shortName, x + size/2, y + m(24*s));
 
-  // Range below name
+  // Range
   ctx.fillStyle = '#4ade80';
-  ctx.font = 'bold 11px monospace';
-  ctx.fillText(`${club.maxRange}y`, x + size / 2, y + 50);
+  ctx.font = `bold ${m(10*s)}px monospace`;
+  ctx.fillText(`${club.maxRange}y`, x + size/2, y + m(38*s));
 
-  // Up/down arrows
+  // Up/down hints
   ctx.fillStyle = selectedIndex > 0 ? '#94a3b8' : '#333';
-  ctx.font = '10px monospace';
-  ctx.fillText('▲ Q', x + size / 2, y + 66);
+  ctx.font = `${m(9*s)}px monospace`;
+  ctx.fillText('▲ Q', x + size/2, y + m(50*s));
 
   ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? '#94a3b8' : '#333';
-  ctx.fillText('▼ E', x + size / 2, y - 4);
+  ctx.fillText('▼ E', x + size/2, y - m(3*s));
 
-  // Club full name to the right
+  // Club name to the right
   ctx.fillStyle = '#94a3b8';
-  ctx.font = '11px monospace';
+  ctx.font = `${m(10*s)}px monospace`;
   ctx.textAlign = 'left';
-  ctx.fillText(club.name, x + size + 10, y + size / 2 + 4);
+  ctx.fillText(club.name, x + size + m(8*s), y + size/2 + m(4*s));
 }
 
 export function drawYardageRuler(
@@ -669,48 +685,49 @@ export function drawYardageRuler(
   const yardsPerPixel = holeData.distance / (holeData.holeX - holeData.teeX);
   const yardsRemaining = Math.max(0, Math.round(pixelDist * yardsPerPixel));
 
-  const rulerW = 250;
-  const rulerH = 14;
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+  const rulerW = m(220*s);
+  const rulerH = m(12*s);
   const rx = canvasWidth / 2 - rulerW / 2;
-  const ry = canvasHeight - 110;
+  const ry = canvasHeight - m(110*s);
 
   // Background
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  roundRect(ctx, rx - 6, ry - 16, rulerW + 12, rulerH + 28, 6);
+  roundRect(ctx, rx - m(5*s), ry - m(14*s), rulerW + m(10*s), rulerH + m(24*s), m(5*s));
   ctx.fill();
 
   // Yardage label
   ctx.fillStyle = '#b0b0b0';
-  ctx.font = '10px monospace';
+  ctx.font = `${m(9*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(`${yardsRemaining} yds to pin`, canvasWidth / 2, ry - 5);
+  ctx.fillText(`${yardsRemaining} yds to pin`, canvasWidth / 2, ry - m(4*s));
 
   // Ruler track
   ctx.fillStyle = '#1a1a1a';
-  roundRect(ctx, rx, ry, rulerW, rulerH, 3);
+  roundRect(ctx, rx, ry, rulerW, rulerH, m(3*s));
   ctx.fill();
 
-  // Fill representing remaining distance (full = far, empty = close)
+  // Fill representing remaining distance
   const totalYards = holeData.distance;
   const ratio = Math.min(1, yardsRemaining / totalYards);
   const fillW = ratio * rulerW;
 
-  // Gradient: green (close) to white (far)
   if (fillW > 0) {
     const rGrad = ctx.createLinearGradient(rx, 0, rx + rulerW, 0);
     rGrad.addColorStop(0, '#22c55e');
     rGrad.addColorStop(0.5, '#86efac');
     rGrad.addColorStop(1, '#ffffff');
     ctx.fillStyle = rGrad;
-    roundRect(ctx, rx, ry, fillW, rulerH, 3);
+    roundRect(ctx, rx, ry, fillW, rulerH, m(3*s));
     ctx.fill();
   }
 
-  // Tick marks for every 50 yards
+  // Tick marks
   ctx.strokeStyle = 'rgba(255,255,255,0.25)';
   ctx.lineWidth = 1;
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = '7px monospace';
+  ctx.font = `${m(6*s)}px monospace`;
   ctx.textAlign = 'center';
   const step = 50;
   for (let y = step; y < totalYards; y += step) {
@@ -724,7 +741,7 @@ export function drawYardageRuler(
   // Border
   ctx.strokeStyle = 'rgba(255,255,255,0.3)';
   ctx.lineWidth = 1;
-  roundRect(ctx, rx, ry, rulerW, rulerH, 3);
+  roundRect(ctx, rx, ry, rulerW, rulerH, m(3*s));
   ctx.stroke();
 
   // Pin flag icon at the right end
@@ -747,31 +764,33 @@ export function drawPowerMeter(
 ) {
   if (!active && power === 0) return;
 
-  const meterW = 250;
-  const meterH = 30;
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+  const meterW = m(220*s);
+  const meterH = m(22*s);
   const mx = canvasWidth / 2 - meterW / 2;
-  const my = canvasHeight - 60;
+  const my = canvasHeight - m(78*s);
 
   // Background
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  roundRect(ctx, mx - 10, my - 5, meterW + 20, meterH + 30, 8);
+  roundRect(ctx, mx - m(8*s), my - m(4*s), meterW + m(16*s), meterH + m(24*s), m(6*s));
   ctx.fill();
 
   // Greyed-out zone beyond cap
   if (powerCap < 1.0) {
     ctx.fillStyle = '#1a1a1a';
-    roundRect(ctx, mx, my, meterW, meterH, 4);
+    roundRect(ctx, mx, my, meterW, meterH, m(3*s));
     ctx.fill();
     ctx.fillStyle = '#2a2a2a';
     const capX = mx + powerCap * meterW;
     ctx.fillRect(capX, my, meterW * (1 - powerCap), meterH);
   } else {
     ctx.fillStyle = '#333';
-    roundRect(ctx, mx, my, meterW, meterH, 4);
+    roundRect(ctx, mx, my, meterW, meterH, m(3*s));
     ctx.fill();
   }
 
-  // Power fill with gradient (only up to cap range)
+  // Power fill
   const filledW = power * meterW;
   if (filledW > 0) {
     const pGrad = ctx.createLinearGradient(mx, 0, mx + powerCap * meterW, 0);
@@ -779,43 +798,43 @@ export function drawPowerMeter(
     pGrad.addColorStop(0.6, '#f59e0b');
     pGrad.addColorStop(1, '#ef4444');
     ctx.fillStyle = pGrad;
-    roundRect(ctx, mx, my, filledW, meterH, 4);
+    roundRect(ctx, mx, my, filledW, meterH, m(3*s));
     ctx.fill();
   }
 
-  // Cap marker line
+  // Cap marker
   if (powerCap < 1.0) {
     const capX = mx + powerCap * meterW;
     ctx.strokeStyle = '#ff4444';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = m(2*s);
     ctx.beginPath();
-    ctx.moveTo(capX, my - 4);
-    ctx.lineTo(capX, my + meterH + 4);
+    ctx.moveTo(capX, my - m(3*s));
+    ctx.lineTo(capX, my + meterH + m(3*s));
     ctx.stroke();
     ctx.fillStyle = '#ff4444';
-    ctx.font = 'bold 10px monospace';
+    ctx.font = `bold ${m(9*s)}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText('SAND', capX, my - 7);
+    ctx.fillText(powerCap <= 0.5 ? 'SAND' : 'ROUGH', capX, my - m(5*s));
   }
 
   // Border
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 2;
-  roundRect(ctx, mx, my, meterW, meterH, 4);
+  ctx.lineWidth = m(2*s);
+  roundRect(ctx, mx, my, meterW, meterH, m(3*s));
   ctx.stroke();
 
   // Label
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 13px monospace';
+  ctx.font = `bold ${m(11*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(active ? 'PRESS SPACE to set power' : `Power: ${Math.round(power * 100)}%`, canvasWidth / 2, my + meterH + 18);
+  ctx.fillText(active ? 'TAP to set power' : `Power: ${Math.round(power * 100)}%`, canvasWidth / 2, my + meterH + m(14*s));
 
   // Power % indicator
   if (power > 0) {
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 12px monospace';
+    ctx.font = `bold ${m(10*s)}px monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${Math.round(power * 100)}%`, mx + filledW / 2, my + 20);
+    ctx.fillText(`${Math.round(power * 100)}%`, mx + filledW / 2, my + meterH - m(5*s));
   }
 }
 
@@ -1132,7 +1151,7 @@ export function drawGameOver(
     .map((p) => ({ player: p, total: p.scores.reduce((a, b) => a + b, 0) }))
     .sort((a, b) => a.total - b.total);
 
-  const totalPar = state.totalHoles * 4;
+  const totalPar = state.allHoleData.reduce((sum, h) => sum + (h?.par ?? 4), 0);
 
   ctx.font = 'bold 20px monospace';
   ctx.fillStyle = '#fbbf24';
@@ -1180,25 +1199,81 @@ export function drawControls(
   const lines: string[] = [];
   const playerIdx = state.currentPlayerIdx;
 
+  const hasGamepad = !!navigator.getGamepads?.()?.find(g => g);
+
   if (state.phase === 'aiming') {
-    lines.push('← → Aim  |  Q/E: Club  |  SPACE or LMB: Power');
+    lines.push(hasGamepad
+      ? '🎮 Stick/D-pad: Aim  |  LB/RB: Club  |  A: Power'
+      : '← → Aim  |  Q/E: Club  |  SPACE or LMB: Power');
   } else if (state.phase === 'powering') {
-    lines.push('Drag ↑↓ to aim  |  Release to launch!');
+    lines.push(hasGamepad
+      ? '🎮 A: Launch!  |  Stick ↑↓: Fine aim'
+      : 'Drag ↑↓ to aim  |  Release to launch!');
   }
 
   if (lines.length === 0) return;
 
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
   const controlText = lines.join('  |  ');
-  ctx.font = '11px monospace';
+  ctx.font = `${m(10*s)}px monospace`;
   const textW = ctx.measureText(controlText).width;
-  const barW = Math.max(240, textW + 30);
+  const barW = Math.max(m(200*s), textW + m(20*s));
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(canvasWidth / 2 - barW / 2, canvasHeight - 36, barW, 28);
+  ctx.fillRect(canvasWidth / 2 - barW / 2, canvasHeight - m(22*s), barW, m(20*s));
 
   ctx.fillStyle = '#94a3b8';
   ctx.textAlign = 'center';
-  ctx.fillText(controlText, canvasWidth / 2, canvasHeight - 17);
+  ctx.fillText(controlText, canvasWidth / 2, canvasHeight - m(8*s));
+}
+
+export function drawTouchControls(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  if (state.phase !== 'aiming') return;
+
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+  const btnSize = m(44 * s);
+  const btnMargin = m(8 * s);
+  const cornerRadius = m(8 * s);
+
+  const drawButton = (x: number, y: number, label: string, sublabel?: string) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    roundRect(ctx, x, y, btnSize, btnSize, cornerRadius);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = m(1.5*s);
+    roundRect(ctx, x, y, btnSize, btnSize, cornerRadius);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${m(18*s)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + btnSize / 2, y + btnSize / 2 + m(6*s));
+    if (sublabel) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = `${m(7*s)}px monospace`;
+      ctx.fillText(sublabel, x + btnSize / 2, y + btnSize - m(3*s));
+    }
+  };
+
+  const clubX = m(12 * s);
+  const clubUpY = canvasHeight - m(120*s) - btnSize - btnMargin;
+  drawButton(clubX, clubUpY, '\u25B2', 'CLUB');
+
+  const clubDnY = canvasHeight - m(120*s) + m(56*s) + btnMargin;
+  drawButton(clubX, clubDnY, '\u25BC', 'CLUB');
+
+  const aimBtnY = canvasHeight - btnSize - btnMargin;
+  const aimLeftX = canvasWidth - btnSize * 2 - btnMargin * 2;
+  const aimRightX = canvasWidth - btnSize - btnMargin;
+  drawButton(aimLeftX, aimBtnY, '\u25C0', 'AIM');
+  drawButton(aimRightX, aimBtnY, '\u25B6', 'AIM');
 }
 
 function roundRect(

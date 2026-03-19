@@ -1,4 +1,4 @@
-import { HoleData, generateHole } from './terrain';
+import { HoleData, Difficulty, generateHole } from './terrain';
 import { Ball, createBall } from './physics';
 import { CLUBS, suggestClub } from './clubs';
 
@@ -59,6 +59,7 @@ export interface GameState {
   scorecardTimer: number;
   lastShotResult: string;
   selectedClubIndex: number;
+  difficulty: Difficulty;
   // Multiplayer turn-alternating: per-player ball positions and stroke counts
   playerBalls: (Ball | null)[];
   playerStrokes: number[];
@@ -78,7 +79,8 @@ function randomWind(): Wind {
 
 export function createInitialState(
   playerNames: string[],
-  totalHoles: number
+  totalHoles: number,
+  difficulty: Difficulty = 'normal'
 ): GameState {
   const colors = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b'];
   const players: Player[] = playerNames.map((name, i) => ({
@@ -88,8 +90,9 @@ export function createInitialState(
   }));
 
   // Pre-generate ALL hole terrain up front so there are no loading hitches mid-game
+  const screenH = typeof window !== 'undefined' ? window.innerHeight : 800;
   const allHoleData: HoleData[] = Array.from({ length: totalHoles }, (_, i) =>
-    generateHole(i + 1)
+    generateHole(i + 1, screenH, difficulty)
   );
 
   return {
@@ -114,6 +117,7 @@ export function createInitialState(
     scorecardTimer: 0,
     lastShotResult: '',
     selectedClubIndex: 0,
+    difficulty,
     playerBalls: playerNames.map(() => null),
     playerStrokes: playerNames.map(() => 0),
     playerSunk: playerNames.map(() => false),
@@ -122,7 +126,8 @@ export function createInitialState(
 
 export function startHole(state: GameState): GameState {
   // Use pre-generated terrain cache — no on-the-fly generation
-  const holeData = state.allHoleData[state.currentHole - 1] ?? generateHole(state.currentHole);
+  const screenH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const holeData = state.allHoleData[state.currentHole - 1] ?? generateHole(state.currentHole, screenH, state.difficulty);
   const ball = createBall(holeData.teeX, holeData.teeY - 10);
   const suggested = suggestClub(holeData.distance);
   // All players start at the tee

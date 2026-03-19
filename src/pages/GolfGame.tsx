@@ -1,22 +1,24 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { GameState, createInitialState, startHole, updateParticles, spawnSandParticles, spawnWaterParticles } from '../game/gameState';
 import { stepPhysics, launchBall, createBall } from '../game/physics';
-import { getSegmentAt } from '../game/terrain';
+import { getSegmentAt, Difficulty } from '../game/terrain';
 import { CLUBS, suggestClub } from '../game/clubs';
-import { Camera, updateCamera, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls } from '../game/renderer';
+import { Camera, updateCamera, uiScale, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls, drawTouchControls } from '../game/renderer';
 import { startAmbience, stopAmbience, playSwingSound, playPutterSound, playHoleSunkSound, playSandSound, playWaterSound } from '../game/audio';
-import { MultiplayerConnection, NetMessage } from '../game/multiplayer';
+import { MultiplayerConnection, NetMessage, rejoinSession } from '../game/multiplayer';
 
 interface GolfGameProps {
   playerNames: string[];
   totalHoles: number;
+  difficulty: Difficulty;
   multiplayer?: MultiplayerConnection;
+  joinCode?: string;
   onBackToMenu: () => void;
 }
 
-export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackToMenu }: GolfGameProps) {
+export default function GolfGame({ playerNames, totalHoles, difficulty, multiplayer, joinCode, onBackToMenu }: GolfGameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef<GameState>(createInitialState(playerNames, totalHoles));
+  const stateRef = useRef<GameState>(createInitialState(playerNames, totalHoles, difficulty));
   const cameraRef = useRef<Camera>({ x: 0, y: 0 });
   const frameRef = useRef<number>(0);
   const frameCountRef = useRef<number>(0);
@@ -30,11 +32,15 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   const isMultiplayer = !!multiplayer;
   const isHost = multiplayer?.role === 'host';
   const isGuest = multiplayer?.role === 'guest';
-  const myPlayerIdx = isGuest ? 1 : 0;
+  const myPlayerIdx = multiplayer?.playerIndex ?? 0;
 
   // Queue for received shots from the other player
   const pendingShotRef = useRef<{ power: number; aimAngle: number; clubIndex: number } | null>(null);
   const pendingAdvanceRef = useRef(false);
+  const droppedPlayersRef = useRef<Set<number>>(new Set()); // playerIndex values of dropped players
+  const joinCodeRef = useRef<string>(''); // for guest rejoin
+  const multiplayerRef = useRef(multiplayer); // mutable ref for reconnection
+  multiplayerRef.current = multiplayer;
 
   const isMyTurn = useCallback(() => {
     if (!isMultiplayer) return true;
@@ -42,6 +48,8 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   }, [isMultiplayer, myPlayerIdx]);
 
   const [disconnected, setDisconnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [droppedNames, setDroppedNames] = useState<string[]>([]);
 
   const getCanvasSize = () => ({
     width: window.innerWidth,
@@ -136,15 +144,65 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   const mouseDownRef = useRef<{ x: number; y: number; backward: boolean } | null>(null);
   const mouseHeldRef = useRef(false);
   const rollingFramesRef = useRef(0);
+  const isTouchDevice = useRef(false);
+  const touchAimRef = useRef<'left' | 'right' | null>(null);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  // Gamepad state
+  const gamepadPrevRef = useRef<{ buttons: boolean[] }>({ buttons: [] });
+  const gamepadAimHeld = useRef(false);
+
+  // Shared pointer-down logic (mouse & touch)
+  function handlePointerDown(clientX: number, clientY: number) {
     startAmbience();
     mouseHeldRef.current = true;
     const state = stateRef.current;
     if (state.showScorecard) return;
 
+    // Check if touch hit a UI button (only on touch devices during aiming)
+    if (isTouchDevice.current && state.phase === 'aiming' && isMyTurn()) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const w = canvas.width;
+        const h = canvas.height;
+        const btnSize = 56;
+        const btnMargin = 12;
+
+        // Club up button: above club carousel
+        const clubUpX = 16, clubUpY = h - 140 - btnSize - btnMargin;
+        if (clientX >= clubUpX && clientX <= clubUpX + btnSize && clientY >= clubUpY && clientY <= clubUpY + btnSize) {
+          const newIdx = Math.max(0, state.selectedClubIndex - 1);
+          const newClub = CLUBS[newIdx];
+          const aimingBackward = state.aimAngle > 90;
+          stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
+          return;
+        }
+        // Club down button: below club carousel
+        const clubDnX = 16, clubDnY = h - 140 + 64 + btnMargin;
+        if (clientX >= clubDnX && clientX <= clubDnX + btnSize && clientY >= clubDnY && clientY <= clubDnY + btnSize) {
+          const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+          const newClub = CLUBS[newIdx];
+          const aimingBackward = state.aimAngle > 90;
+          stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
+          return;
+        }
+        // Aim left button: bottom-right area
+        const aimBtnY = h - btnSize - btnMargin;
+        const aimLeftX = w - btnSize * 2 - btnMargin * 2;
+        if (clientX >= aimLeftX && clientX <= aimLeftX + btnSize && clientY >= aimBtnY && clientY <= aimBtnY + btnSize) {
+          touchAimRef.current = 'left';
+          return;
+        }
+        // Aim right button
+        const aimRightX = w - btnSize - btnMargin;
+        if (clientX >= aimRightX && clientX <= aimRightX + btnSize && clientY >= aimBtnY && clientY <= aimBtnY + btnSize) {
+          touchAimRef.current = 'right';
+          return;
+        }
+      }
+    }
+
     if (state.phase === 'aiming' && isMyTurn()) {
-      mouseDownRef.current = { x: e.clientX, y: e.clientY, backward: state.aimAngle > 90 };
+      mouseDownRef.current = { x: clientX, y: clientY, backward: state.aimAngle > 90 };
       stateRef.current = {
         ...state,
         phase: 'powering',
@@ -165,14 +223,14 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       stopAmbience();
       onBackToMenu();
     }
-  }, [isMyTurn, sendMsg, isMultiplayer]);
+  }
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  function handlePointerMove(clientX: number, clientY: number) {
     const state = stateRef.current;
     if (state.phase !== 'powering' || !mouseDownRef.current) return;
     if (!isMyTurn()) return;
 
-    const dy = mouseDownRef.current.y - e.clientY;
+    const dy = mouseDownRef.current.y - clientY;
     const sensitivity = 3;
     const clubAngle = CLUBS[state.selectedClubIndex].launchAngle;
     const aimingBackward = mouseDownRef.current.backward;
@@ -184,15 +242,47 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       : Math.max(5, Math.min(85, baseAngle + angleOffset));
 
     stateRef.current = { ...state, aimAngle: newAngle };
-  }, [isMyTurn]);
+  }
 
-  const handleMouseUp = useCallback(() => {
+  function handlePointerUp() {
     mouseHeldRef.current = false;
+    touchAimRef.current = null;
     const state = stateRef.current;
     if (state.phase === 'powering' && mouseDownRef.current && isMyTurn()) {
       doLaunch();
       mouseDownRef.current = null;
     }
+  }
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    handlePointerDown(e.clientX, e.clientY);
+  }, [isMyTurn, sendMsg, isMultiplayer]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    handlePointerMove(e.clientX, e.clientY);
+  }, [isMyTurn]);
+
+  const handleMouseUp = useCallback(() => {
+    handlePointerUp();
+  }, [isMyTurn]);
+
+  // Touch handlers
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    isTouchDevice.current = true;
+    const touch = e.touches[0];
+    if (touch) handlePointerDown(touch.clientX, touch.clientY);
+  }, [isMyTurn, sendMsg, isMultiplayer]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (touch) handlePointerMove(touch.clientX, touch.clientY);
+  }, [isMyTurn]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    handlePointerUp();
   }, [isMyTurn]);
 
   // Launch the ball — called when it's MY turn
@@ -263,25 +353,16 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   }
 
   // ========== MULTIPLAYER MESSAGE HANDLING ==========
-  useEffect(() => {
-    if (!multiplayer) return;
-
-    multiplayer.connection.on('close', () => {
-      disconnectedRef.current = true;
-      setDisconnected(true);
-    });
-
-    multiplayer.onMessage((msg: NetMessage) => {
+  function setupMessageHandlers(conn: MultiplayerConnection) {
+    conn.onMessage((msg: NetMessage) => {
       switch (msg.type) {
         case 'shot': {
           pendingShotRef.current = { power: msg.power, aimAngle: msg.aimAngle, clubIndex: msg.clubIndex };
           break;
         }
         case 'advance': {
-          // In lockstep, advance comes from host — guest waits for hole-init
-          // For local/host this triggers advancement
           if (isGuest) {
-            // Guest just waits for hole-init that follows
+            // Guest waits for hole-init
           } else {
             pendingAdvanceRef.current = true;
           }
@@ -302,11 +383,34 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
           break;
         }
         case 'ready': {
-          // Guest is ready — send current hole data
           if (isHost) {
             const state = stateRef.current;
             if (state.holeData) {
-              sendMsg({
+              conn.sendMessage({
+                type: 'hole-init',
+                holeIndex: state.currentHole - 1,
+                holeData: state.holeData,
+                wind: state.wind,
+              });
+            }
+          }
+          break;
+        }
+        case 'player-dropped': {
+          droppedPlayersRef.current.add(msg.playerIndex);
+          const name = stateRef.current.players[msg.playerIndex]?.name ?? `Player ${msg.playerIndex + 1}`;
+          setDroppedNames(prev => [...prev.filter(n => n !== name), name]);
+          break;
+        }
+        case 'player-rejoined': {
+          droppedPlayersRef.current.delete(msg.playerIndex);
+          const name = stateRef.current.players[msg.playerIndex]?.name ?? `Player ${msg.playerIndex + 1}`;
+          setDroppedNames(prev => prev.filter(n => n !== name));
+          // Host sends current hole data to rejoined player
+          if (isHost) {
+            const state = stateRef.current;
+            if (state.holeData) {
+              conn.sendMessage({
                 type: 'hole-init',
                 holeIndex: state.currentHole - 1,
                 holeData: state.holeData,
@@ -321,19 +425,68 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         }
       }
     });
+  }
+
+  useEffect(() => {
+    if (!multiplayer) return;
+
+    multiplayer.connection.on('close', () => {
+      if (isGuest && !disconnectedRef.current) {
+        // Guest lost connection — attempt auto-reconnect
+        disconnectedRef.current = true;
+        setReconnecting(true);
+        const code = joinCodeRef.current;
+        const slot = myPlayerIdx - 1; // slotIndex is 0-based
+        let attempts = 0;
+        const tryReconnect = () => {
+          attempts++;
+          console.log(`[MP:GUEST] Reconnect attempt ${attempts}...`);
+          rejoinSession(code, slot).then((newConn) => {
+            console.log(`[MP:GUEST] ✅ Reconnected!`);
+            disconnectedRef.current = false;
+            setReconnecting(false);
+            setDisconnected(false);
+            multiplayerRef.current = newConn;
+            // Re-register message handlers by sending ready
+            newConn.sendMessage({ type: 'ready', playerIndex: myPlayerIdx });
+            // Set up message handling on new connection
+            setupMessageHandlers(newConn);
+          }).catch(() => {
+            if (attempts < 5) {
+              setTimeout(tryReconnect, 2000);
+            } else {
+              setReconnecting(false);
+              setDisconnected(true);
+            }
+          });
+        };
+        setTimeout(tryReconnect, 1000);
+      } else {
+        disconnectedRef.current = true;
+        setDisconnected(true);
+      }
+    });
+
+    setupMessageHandlers(multiplayer);
 
     // Guest: signal ready so host sends hole data
     if (isGuest) {
-      sendMsg({ type: 'ready' });
+      sendMsg({ type: 'ready', playerIndex: myPlayerIdx });
     }
   }, [multiplayer, isHost, isGuest]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    const onGpConnect = (e: GamepadEvent) => console.log('[GAMEPAD] Connected:', e.gamepad.id, 'index:', e.gamepad.index, 'buttons:', e.gamepad.buttons.length, 'axes:', e.gamepad.axes.length);
+    const onGpDisconnect = (e: GamepadEvent) => console.log('[GAMEPAD] Disconnected:', e.gamepad.id);
+    window.addEventListener('gamepadconnected', onGpConnect);
+    window.addEventListener('gamepaddisconnected', onGpDisconnect);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('gamepadconnected', onGpConnect);
+      window.removeEventListener('gamepaddisconnected', onGpDisconnect);
     };
   }, [handleKeyDown, handleKeyUp]);
 
@@ -341,6 +494,7 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
   useEffect(() => {
     lastTimeRef.current = 0;
     accumRef.current = 0;
+    if (joinCode) joinCodeRef.current = joinCode;
     if (!isGuest) {
       stateRef.current = startHole(stateRef.current);
     }
@@ -355,6 +509,53 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
     const FIXED_DT = 1000 / 90;
     const MAX_FRAME_TIME = 100;
+
+    // Gamepad: returns pressed state for each button (true = just pressed this frame)
+    function pollGamepad() {
+      const gamepads = navigator.getGamepads?.();
+      if (!gamepads) return null;
+      // Prefer a standard gamepad (has mapping === 'standard') over other devices like headsets
+      let gp: Gamepad | null = null;
+      for (let i = 0; i < gamepads.length; i++) {
+        const g = gamepads[i];
+        if (g && g.mapping === 'standard') { gp = g; break; }
+      }
+      if (!gp) {
+        // Fallback: any gamepad with enough buttons (skip headsets etc)
+        for (let i = 0; i < gamepads.length; i++) {
+          const g = gamepads[i];
+          if (g && g.buttons.length >= 12) { gp = g; break; }
+        }
+      }
+      if (!gp) return null;
+
+      const prev = gamepadPrevRef.current;
+      const pressed = (idx: number) => gp.buttons[idx]?.pressed && !prev.buttons[idx];
+      const held = (idx: number) => !!gp.buttons[idx]?.pressed;
+
+      const result = {
+        // Standard gamepad mapping (Xbox):
+        // 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=LT, 7=RT
+        // 8=Back, 9=Start, 12=DUp, 13=DDown, 14=DLeft, 15=DRight
+        aPressed: pressed(0),      // A = space (start power / confirm)
+        bHeld: held(1),            // B = fast forward
+        yPressed: pressed(3),      // Y = toggle scorecard
+        lbPressed: pressed(4),     // LB = club up
+        rbPressed: pressed(5),     // RB = club down
+        dLeft: held(14),           // D-pad left = aim left
+        dRight: held(15),          // D-pad right = aim right
+        dUp: pressed(12),          // D-pad up = club up (alt)
+        dDown: pressed(13),        // D-pad down = club down (alt)
+        // Left stick
+        stickX: Math.abs(gp.axes[0]) > 0.15 ? gp.axes[0] : 0,
+        stickY: Math.abs(gp.axes[1]) > 0.15 ? gp.axes[1] : 0,
+        anyButton: gp.buttons.some(b => b.pressed),
+      };
+
+      // Save current button state for next frame edge detection
+      gamepadPrevRef.current = { buttons: gp.buttons.map(b => b.pressed) };
+      return result;
+    }
 
     const tick = (timestamp: number) => {
       if (lastTimeRef.current === 0) lastTimeRef.current = timestamp;
@@ -402,14 +603,57 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         frameCountRef.current++;
         state = stateRef.current;
 
-      // Handle aim key input (only when it's my turn)
+      // Poll gamepad
+      const gp = pollGamepad();
+      if (gp) {
+        // Gamepad held B = fast forward (like mouse hold)
+        mouseHeldRef.current = mouseHeldRef.current || gp.bHeld;
+        if (!gp.bHeld && !mouseDownRef.current) mouseHeldRef.current = false;
+      }
+
+      // Handle aim key/touch/gamepad input (only when it's my turn)
       if (state.phase === 'aiming' && isMyTurn()) {
         aimDelayRef.current = Math.max(0, aimDelayRef.current - 1);
         const aimSpeed = 1.2;
 
         let dAngle = 0;
-        if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = aimSpeed;
-        if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = -aimSpeed;
+        if (keys.has('ArrowLeft') || keys.has('KeyA') || touchAimRef.current === 'left') dAngle = aimSpeed;
+        if (keys.has('ArrowRight') || keys.has('KeyD') || touchAimRef.current === 'right') dAngle = -aimSpeed;
+
+        // Gamepad aim: left stick or d-pad
+        if (gp) {
+          if (gp.dLeft || gp.stickX < -0.15) dAngle = aimSpeed * (gp.stickX < -0.15 ? Math.abs(gp.stickX) : 1);
+          if (gp.dRight || gp.stickX > 0.15) dAngle = -aimSpeed * (gp.stickX > 0.15 ? gp.stickX : 1);
+
+          // Club selection: LB/RB or D-pad up/down
+          if (gp.lbPressed || gp.dUp) {
+            const newIdx = Math.max(0, state.selectedClubIndex - 1);
+            const newClub = CLUBS[newIdx];
+            const aimingBackward = state.aimAngle > 90;
+            stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
+            state = stateRef.current;
+          }
+          if (gp.rbPressed || gp.dDown) {
+            const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+            const newClub = CLUBS[newIdx];
+            const aimingBackward = state.aimAngle > 90;
+            stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
+            state = stateRef.current;
+          }
+
+          // A button = start power meter
+          if (gp.aPressed) {
+            startAmbience();
+            stateRef.current = { ...state, phase: 'powering', power: 0, powerDirection: 1, powerActive: true };
+            state = stateRef.current;
+          }
+
+          // Y = toggle scorecard
+          if (gp.yPressed) {
+            stateRef.current = { ...state, showScorecard: !state.showScorecard };
+            state = stateRef.current;
+          }
+        }
 
         if (dAngle !== 0) {
           const raw = state.aimAngle + dAngle;
@@ -417,6 +661,37 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
           stateRef.current = { ...state, aimAngle: newAngle };
           state = stateRef.current;
         }
+      } else if (state.phase === 'powering' && isMyTurn() && gp?.aPressed) {
+        // A button = confirm shot
+        doLaunch();
+        state = stateRef.current;
+      } else if (state.phase === 'scorecard' && gp?.aPressed) {
+        if (isMultiplayer) {
+          if (isHost) { sendMsg({ type: 'advance' }); advanceToNextHole(); }
+        } else {
+          advanceToNextHole();
+        }
+        state = stateRef.current;
+      } else if (state.phase === 'gameOver' && gp?.aPressed) {
+        stopAmbience();
+        onBackToMenu();
+      }
+
+      // Gamepad Y for scorecard toggle (works in any phase)
+      if (gp?.yPressed && state.phase !== 'aiming') {
+        stateRef.current = { ...state, showScorecard: !state.showScorecard };
+        state = stateRef.current;
+      }
+
+      // Gamepad stick Y for fine aim during powering
+      if (state.phase === 'powering' && isMyTurn() && gp && Math.abs(gp.stickY) > 0.15) {
+        const aimingBackward = state.aimAngle > 90;
+        const aimAdjust = -gp.stickY * 0.8; // stick up = higher angle
+        const newAngle = aimingBackward
+          ? Math.max(95, Math.min(175, state.aimAngle + aimAdjust))
+          : Math.max(5, Math.min(85, state.aimAngle + aimAdjust));
+        stateRef.current = { ...state, aimAngle: newAngle };
+        state = stateRef.current;
       }
 
       // Power meter animation
@@ -425,7 +700,7 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
           : null;
-        const POWER_CAP = ballSeg?.type === 'sand' ? 0.5 : 1.0;
+        const POWER_CAP = ballSeg?.type === 'sand' ? 0.5 : ballSeg?.type === 'rough' ? 0.75 : 1.0;
         let newPower = state.power + POWER_SPEED * state.powerDirection;
         let newDir = state.powerDirection;
         if (newPower >= POWER_CAP) { newPower = POWER_CAP; newDir = -1; }
@@ -471,12 +746,12 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
 
         newParticles = updateParticles(newParticles);
 
-        // Helper: find next unsunk player
+        // Helper: find next unsunk, non-dropped player
         const findNextPlayer = () => {
           const numPlayers = state.players.length;
           for (let i = 1; i <= numPlayers; i++) {
             const idx = (state.currentPlayerIdx + i) % numPlayers;
-            if (!state.playerSunk[idx]) return idx;
+            if (!state.playerSunk[idx] && !droppedPlayersRef.current.has(idx)) return idx;
           }
           return -1;
         };
@@ -703,8 +978,11 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         }
       }
 
-      drawHUD(ctx, state, width);
+      drawHUD(ctx, state, width, height);
       drawControls(ctx, state, width, height);
+      if (isTouchDevice.current) {
+        drawTouchControls(ctx, state, width, height);
+      }
 
       if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
         drawClubCarousel(ctx, state.selectedClubIndex, width, height);
@@ -714,18 +992,20 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
           : null;
-        const renderPowerCap = ballSeg?.type === 'sand' ? 0.5 : 1.0;
+        const renderPowerCap = ballSeg?.type === 'sand' ? 0.5 : ballSeg?.type === 'rough' ? 0.75 : 1.0;
         drawPowerMeter(ctx, state.power, state.phase === 'powering', width, height, renderPowerCap);
       }
 
       // When it's NOT my turn and phase is aiming, show waiting indicator
       if (isMultiplayer && state.phase === 'aiming' && !isMyTurn()) {
         const otherPlayer = state.players[state.currentPlayerIdx];
+        const s = uiScale(height);
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(width / 2 - 120, height / 2 - 30, 240, 50);
+        const bw = Math.round(200*s);
+        ctx.fillRect(width / 2 - bw/2, height / 2 - Math.round(20*s), bw, Math.round(36*s));
         ctx.fillStyle = '#fbbf24';
-        ctx.font = 'bold 16px monospace';
+        ctx.font = `bold ${Math.round(14*s)}px monospace`;
         ctx.textAlign = 'center';
         ctx.fillText(`${otherPlayer?.name ?? 'Opponent'} is aiming...`, width / 2, height / 2);
         ctx.restore();
@@ -734,12 +1014,13 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
         drawYardageRuler(ctx, state.ball, state.holeData, width, height);
         if (mouseHeldRef.current || rollingFramesRef.current > 180) {
+          const s = uiScale(height);
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(width / 2 - 50, height - 40, 100, 24);
+          ctx.fillRect(width / 2 - Math.round(40*s), height - Math.round(32*s), Math.round(80*s), Math.round(20*s));
           ctx.fillStyle = '#fbbf24';
-          ctx.font = 'bold 12px monospace';
+          ctx.font = `bold ${Math.round(10*s)}px monospace`;
           ctx.textAlign = 'center';
-          ctx.fillText('\u23e9 6x Speed', width / 2, height - 23);
+          ctx.fillText('\u23e9 6x Speed', width / 2, height - Math.round(18*s));
         }
       }
 
@@ -757,11 +1038,12 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
       if (state.showScorecard || state.phase === 'scorecard') {
         drawScorecard(ctx, state, width, height);
         if (state.phase === 'scorecard') {
+          const s = uiScale(height);
           ctx.fillStyle = '#4ade80';
-          ctx.font = 'bold 14px monospace';
+          ctx.font = `bold ${Math.round(12*s)}px monospace`;
           ctx.textAlign = 'center';
-          const scorecardMsg = (isMultiplayer && isGuest) ? 'Waiting for host to continue...' : 'Press SPACE or click for next hole';
-          ctx.fillText(scorecardMsg, width / 2, height - 30);
+          const scorecardMsg = (isMultiplayer && isGuest) ? 'Waiting for host to continue...' : 'Press SPACE or tap for next hole';
+          ctx.fillText(scorecardMsg, width / 2, height - Math.round(20*s));
         }
       }
 
@@ -774,18 +1056,31 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         const currentPlayer = state.players[state.currentPlayerIdx];
         const turnText = isMyTurn() ? 'YOUR SHOT' : `${currentPlayer?.name ?? 'Opponent'}'s shot`;
         const turnColor = isMyTurn() ? '#4ade80' : '#fbbf24';
+        const s = uiScale(height);
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(width / 2 - 80, 50, 160, 26);
+        ctx.fillRect(width / 2 - Math.round(70*s), Math.round(40*s), Math.round(140*s), Math.round(22*s));
         ctx.fillStyle = turnColor;
-        ctx.font = 'bold 13px monospace';
+        ctx.font = `bold ${Math.round(11*s)}px monospace`;
         ctx.textAlign = 'center';
-        ctx.fillText(turnText, width / 2, 68);
+        ctx.fillText(turnText, width / 2, Math.round(56*s));
         ctx.restore();
       }
 
-      // Disconnected overlay
-      if (disconnectedRef.current) {
+      // Reconnecting overlay
+      if (reconnecting) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 24px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('RECONNECTING...', width / 2, height / 2 - 10);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '14px monospace';
+        ctx.fillText('Attempting to rejoin the game', width / 2, height / 2 + 20);
+      }
+      // Disconnected overlay (unrecoverable)
+      else if (disconnectedRef.current) {
         ctx.fillStyle = 'rgba(0,0,0,0.8)';
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = '#ef4444';
@@ -794,9 +1089,23 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         ctx.fillText('DISCONNECTED', width / 2, height / 2 - 20);
         ctx.fillStyle = '#94a3b8';
         ctx.font = '14px monospace';
-        ctx.fillText('Your opponent has left the game', width / 2, height / 2 + 15);
+        ctx.fillText('Connection lost', width / 2, height / 2 + 15);
         ctx.fillStyle = '#4ade80';
         ctx.fillText('Click to return to menu', width / 2, height / 2 + 45);
+      }
+      // Dropped player banner (shown to remaining players)
+      if (droppedPlayersRef.current.size > 0 && !disconnectedRef.current && !reconnecting) {
+        const names = Array.from(droppedPlayersRef.current).map(idx =>
+          stateRef.current.players[idx]?.name ?? `Player ${idx + 1}`
+        ).join(', ');
+        ctx.save();
+        ctx.fillStyle = 'rgba(239,68,68,0.85)';
+        ctx.fillRect(width / 2 - 160, 100, 320, 28);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`⚠ ${names} disconnected — skipping turns`, width / 2, 118);
+        ctx.restore();
       }
 
       frameRef.current = requestAnimationFrame(tick);
@@ -823,9 +1132,14 @@ export default function GolfGame({ playerNames, totalHoles, multiplayer, onBackT
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
         onClick={handleCanvasClick}
+        onContextMenu={(e) => e.preventDefault()}
         className="block cursor-crosshair"
-        style={{ touchAction: 'none' }}
+        style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' } as React.CSSProperties}
       />
       <button
         onClick={() => { stopAmbience(); multiplayer?.disconnect(); onBackToMenu(); }}

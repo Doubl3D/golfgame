@@ -7,6 +7,7 @@
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
+    "start": "node server.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
@@ -72,7 +73,6 @@
     "zod": "^3.0.0"
   },
   "dependencies": {
-    "peer": "^1.0.2",
-    "peerjs": "^1.5.5"
+    "ws": "^8.18.0"
   }
 }

@@ -1,16 +1,76 @@
+// Production server: serves static game files + WebSocket relay on one port
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 
-const PORT = 9000;
-const wss = new WebSocketServer({ port: PORT });
+const PORT = process.env.PORT || 3000;
+const STATIC_DIR = path.join(__dirname, 'dist', 'public');
 
-// Rooms: joinCode -> { host: ws|null, guests: (ws|null)[], maxGuests: number }
-// Guest slots are preserved on disconnect for rejoin
+// MIME types for static file serving
+const MIME = {
+  '.html': 'text/html',
+  '.js':   'application/javascript',
+  '.css':  'text/css',
+  '.json': 'application/json',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.svg':  'image/svg+xml',
+  '.ico':  'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2':'font/woff2',
+  '.ttf':  'font/ttf',
+  '.wasm': 'application/wasm',
+};
+
+// HTTP server for static files
+const server = http.createServer((req, res) => {
+  // Health check endpoint
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('ok');
+    return;
+  }
+
+  let filePath = path.join(STATIC_DIR, req.url === '/' ? 'index.html' : req.url);
+
+  // Security: prevent path traversal
+  if (!filePath.startsWith(STATIC_DIR)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+
+  fs.access(filePath, fs.constants.F_OK, (err) => {
+    if (err) {
+      // SPA fallback: serve index.html for non-file routes
+      filePath = path.join(STATIC_DIR, 'index.html');
+    }
+
+    fs.readFile(filePath, (readErr, data) => {
+      if (readErr) {
+        res.writeHead(500);
+        res.end('Internal Server Error');
+        return;
+      }
+      const contentType = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    });
+  });
+});
+
+// ========== WebSocket relay (same as peerserver.cjs) ==========
+const wss = new WebSocketServer({ server, path: '/ws' });
+
 const rooms = new Map();
 
 wss.on('connection', (ws) => {
-  let role = null;   // 'host' | 'guest'
+  let role = null;
   let roomCode = null;
-  let slotIndex = -1; // guest slot index (0-based within guests array)
+  let slotIndex = -1;
 
   ws.on('message', (raw) => {
     let msg;
@@ -29,10 +89,8 @@ wss.on('connection', (ws) => {
       const room = rooms.get(roomCode);
       if (!room || !room.host || room.host.readyState !== 1) {
         ws.send(JSON.stringify({ action: 'error', message: 'Room not found' }));
-        console.log(`[GUEST] Room "${roomCode}" not found`);
         return;
       }
-      // Find first empty slot
       slotIndex = room.guests.indexOf(null);
       if (slotIndex === -1) {
         ws.send(JSON.stringify({ action: 'error', message: 'Room is full (max 4 players)' }));
@@ -42,10 +100,9 @@ wss.on('connection', (ws) => {
       const connectedCount = room.guests.filter(g => g !== null).length;
       ws.send(JSON.stringify({ action: 'joined', playerIndex: slotIndex + 1 }));
       room.host.send(JSON.stringify({ action: 'guest-joined', guestCount: connectedCount, slotIndex }));
-      console.log(`[GUEST] Joined room "${roomCode}" slot ${slotIndex} (${connectedCount} guests total)`);
+      console.log(`[GUEST] Joined room "${roomCode}" slot ${slotIndex}`);
     }
     else if (msg.action === 'rejoin') {
-      // Rejoin an existing slot after disconnect
       roomCode = msg.code;
       role = 'guest';
       const requestedSlot = msg.slotIndex;
@@ -54,11 +111,9 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ action: 'error', message: 'Room not found' }));
         return;
       }
-      // Check if the requested slot is available (null = disconnected)
       if (requestedSlot >= 0 && requestedSlot < 3 && room.guests[requestedSlot] === null) {
         slotIndex = requestedSlot;
       } else {
-        // Try any empty slot
         slotIndex = room.guests.indexOf(null);
       }
       if (slotIndex === -1) {
@@ -97,19 +152,16 @@ wss.on('connection', (ws) => {
     if (!room) return;
 
     if (role === 'host') {
-      // Notify all guests
       for (const g of room.guests) {
         if (g && g.readyState === 1) g.send(JSON.stringify({ action: 'disconnected' }));
       }
       rooms.delete(roomCode);
       console.log(`[HOST] Room "${roomCode}" closed`);
     } else {
-      // Mark slot as empty (null) but don't remove it — allows rejoin
       if (slotIndex >= 0 && slotIndex < room.guests.length) {
         room.guests[slotIndex] = null;
       }
       const connectedCount = room.guests.filter(g => g !== null).length;
-      // Notify host and other guests
       if (room.host && room.host.readyState === 1) {
         room.host.send(JSON.stringify({ action: 'guest-dropped', guestCount: connectedCount, slotIndex, playerIndex: slotIndex + 1 }));
       }
@@ -118,9 +170,23 @@ wss.on('connection', (ws) => {
           g.send(JSON.stringify({ action: 'player-dropped', playerIndex: slotIndex + 1 }));
         }
       }
-      console.log(`[GUEST] Dropped from room "${roomCode}" slot ${slotIndex} (${connectedCount} guests remain)`);
+      console.log(`[GUEST] Dropped from room "${roomCode}" slot ${slotIndex}`);
     }
   });
 });
 
-console.log(`WebSocket relay server running on port ${PORT}`);
+// Clean up stale rooms every 5 minutes
+setInterval(() => {
+  for (const [code, room] of rooms) {
+    if (!room.host || room.host.readyState !== 1) {
+      rooms.delete(code);
+      console.log(`[CLEANUP] Removed stale room "${code}"`);
+    }
+  }
+}, 5 * 60 * 1000);
+
+server.listen(PORT, () => {
+  console.log(`Golf game server running on port ${PORT}`);
+  console.log(`  Static files: ${STATIC_DIR}`);
+  console.log(`  WebSocket relay: ws://0.0.0.0:${PORT}/ws`);
+});

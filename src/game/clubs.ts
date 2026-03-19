@@ -28,7 +28,7 @@ export const CLUBS: Club[] = [
   { name: 'Sand Wedge',     shortName: 'SW', maxRange: 70,  launchAngle: 56, maxPower: 11.3, spinFactor: 1.0,  icon: '🔶' },
 
   // Putter
-  { name: 'Putter',     shortName: 'PT',  maxRange: 30,  launchAngle: 3,   maxPower: 6,    spinFactor: 0.0, icon: '🏒' },
+  { name: 'Putter',     shortName: 'PT',  maxRange: 50,  launchAngle: 3,   maxPower: 9,    spinFactor: 0.0, icon: '🏒' },
 ];
 
 export function getClubIndex(name: string): number {

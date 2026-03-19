@@ -261,8 +261,8 @@ export function stepPhysics(
         }
 
         // Surface friction — lower values = more friction = ball stops faster
-        const baseFriction = segment.type === 'green' ? 0.89
-          : segment.type === 'fringe' ? 0.86
+        const baseFriction = segment.type === 'green' ? 0.92
+          : segment.type === 'fringe' ? 0.88
           : segment.type === 'fairway' ? 0.83
           : segment.type === 'rough' ? 0.72
           : segment.type === 'sand' ? 0.50
