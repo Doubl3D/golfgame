@@ -15,6 +15,7 @@ export type GamePhase =
   | 'powering'
   | 'inFlight'
   | 'rolling'
+  | 'settled'
   | 'holeSunk'
   | 'scorecard'
   | 'gameOver';
@@ -56,6 +57,7 @@ export interface GameState {
   wind: Wind;
   holeIntroTimer: number;
   holeSunkTimer: number;
+  settledTimer: number;
   scorecardTimer: number;
   lastShotResult: string;
   selectedClubIndex: number;
@@ -114,6 +116,7 @@ export function createInitialState(
     wind: randomWind(),
     holeIntroTimer: 0,
     holeSunkTimer: 0,
+    settledTimer: 0,
     scorecardTimer: 0,
     lastShotResult: '',
     selectedClubIndex: 0,

@@ -45,8 +45,7 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
   const [waitingForHost, setWaitingForHost] = useState(false);
 
   const handleStart = () => {
-    const names = playerNames.slice(0, numPlayers);
-    onStart(names, totalHoles, difficulty);
+    onStart([playerNames[0] || 'Player 1'], totalHoles, difficulty);
   };
 
   const updateName = (idx: number, name: string) => {
@@ -188,27 +187,23 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
             else if (focusIdx === 2) setMode('join');
           }
         } else if (mode === 'local') {
-          // Items: 0=players, 1=holes, 2=difficulty, 3=start, 4=back
+          // Items: 0=holes, 1=difficulty, 2=start, 3=back
           if (up) setFocusIdx(f => Math.max(0, f - 1));
-          if (down) setFocusIdx(f => Math.min(4, f + 1));
+          if (down) setFocusIdx(f => Math.min(3, f + 1));
           if (focusIdx === 0) {
-            if (left) setNumPlayers(p => Math.max(1, p - 1));
-            if (right) setNumPlayers(p => Math.min(4, p + 1));
-          }
-          if (focusIdx === 1) {
             const holeOpts = [3, 9, 18];
             const curHIdx = holeOpts.indexOf(totalHoles);
             if (left && curHIdx > 0) setTotalHoles(holeOpts[curHIdx - 1]);
             if (right && curHIdx < 2) setTotalHoles(holeOpts[curHIdx + 1]);
           }
-          if (focusIdx === 2) {
+          if (focusIdx === 1) {
             const diffOpts: Difficulty[] = ['easy', 'normal', 'expert'];
             const curDIdx = diffOpts.indexOf(difficulty);
             if (left && curDIdx > 0) setDifficulty(diffOpts[curDIdx - 1]);
             if (right && curDIdx < 2) setDifficulty(diffOpts[curDIdx + 1]);
           }
-          if (focusIdx === 3 && aBtn) handleStart();
-          if (focusIdx === 4 && aBtn) setMode('menu');
+          if (focusIdx === 2 && aBtn) handleStart();
+          if (focusIdx === 3 && aBtn) setMode('menu');
           if (bBtn) setMode('menu');
         } else if (mode === 'host') {
           // Items: 0=holes, 1=start, 2=back
@@ -559,42 +554,26 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
         <div className={`relative z-10 flex flex-col items-center ${isSmall ? 'gap-2' : 'gap-5'} rounded-2xl`} style={cardStyle}>
           <div style={{ fontSize: isSmall ? 20 : 28, fontWeight: 900, color: '#4ade80', fontFamily: 'monospace' }}>LOCAL GAME</div>
 
-          {/* Number of players */}
-          <div className="w-full" style={{ outline: focusIdx === 0 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 4, borderRadius: 8 }}>
-            <label style={labelStyle}>Players {focusIdx === 0 ? '← →' : ''}</label>
-            <div className="flex gap-3 mt-2">
-              {[1, 2, 3, 4].map((n) => (
-                <button key={n} onClick={() => setNumPlayers(n)} style={btnStyle(numPlayers === n)}>
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Player names */}
-          <div className="w-full flex flex-col gap-3">
-            <label style={labelStyle}>Player Names</label>
-            {Array.from({ length: numPlayers }).map((_, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div style={{ width: 12, height: 12, borderRadius: '50%', background: playerColors[i], flexShrink: 0 }} />
-                <input
-                  type="text"
-                  value={playerNames[i] ?? `Player ${i + 1}`}
-                  onChange={(e) => updateName(i, e.target.value)}
-                  maxLength={12}
-                  style={{
-                    flex: 1, padding: '9px 12px', borderRadius: 8,
-                    border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.05)',
-                    color: '#ffffff', fontFamily: 'monospace', fontSize: 14, outline: 'none',
-                  }}
-                />
-              </div>
-            ))}
+          {/* Player name */}
+          <div className="w-full">
+            <label style={labelStyle}>Your Name</label>
+            <input
+              type="text"
+              value={playerNames[0]}
+              onChange={(e) => updateName(0, e.target.value)}
+              maxLength={12}
+              style={{
+                width: '100%', padding: '9px 12px', borderRadius: 8,
+                border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.05)',
+                color: '#ffffff', fontFamily: 'monospace', fontSize: 14, outline: 'none',
+                marginTop: 8, boxSizing: 'border-box',
+              }}
+            />
           </div>
 
           {/* Holes */}
-          <div className="w-full" style={{ outline: focusIdx === 1 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 4, borderRadius: 8 }}>
-            <label style={labelStyle}>Round Length {focusIdx === 1 ? '← →' : ''}</label>
+          <div className="w-full" style={{ outline: focusIdx === 0 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 4, borderRadius: 8 }}>
+            <label style={labelStyle}>Round Length {focusIdx === 0 ? '← →' : ''}</label>
             <div className="flex gap-3 mt-2">
               {[3, 9, 18].map((h) => (
                 <button key={h} onClick={() => setTotalHoles(h)} style={btnStyle(totalHoles === h)}>
@@ -605,8 +584,8 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
           </div>
 
           {/* Difficulty */}
-          <div className="w-full" style={{ outline: focusIdx === 2 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 4, borderRadius: 8 }}>
-            <label style={labelStyle}>Difficulty {focusIdx === 2 ? '← →' : ''}</label>
+          <div className="w-full" style={{ outline: focusIdx === 1 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 4, borderRadius: 8 }}>
+            <label style={labelStyle}>Difficulty {focusIdx === 1 ? '← →' : ''}</label>
             <div className="flex gap-3 mt-2">
               {(['easy', 'normal', 'expert'] as Difficulty[]).map((d) => (
                 <button key={d} onClick={() => setDifficulty(d)} style={{
@@ -624,34 +603,21 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
             </div>
           </div>
 
-          {/* Controls hint — hidden on small screens */}
-          {!isSmall && (
-          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '12px 16px', width: '100%' }}>
-            <div style={{ color: '#64748b', fontSize: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>Controls</div>
-            <div style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', lineHeight: 2 }}>
-              <span style={{ color: '#fbbf24' }}>← →</span> Aim &nbsp;|&nbsp; <span style={{ color: '#fbbf24' }}>Q E</span> Club Select<br />
-              <span style={{ color: '#4ade80' }}>SPACE</span> Power &amp; Launch<br />
-              <span style={{ color: '#4ade80' }}>LMB Hold</span> Power + Drag to Aim<br />
-              <span style={{ color: '#64748b' }}>F</span> Scorecard
-            </div>
-          </div>
-          )}
-
           <button onClick={handleStart} style={{
             ...bigBtnStyle,
-            outline: focusIdx === 3 ? '3px solid #ffffff' : 'none',
+            outline: focusIdx === 2 ? '3px solid #ffffff' : 'none',
             outlineOffset: 2,
           }}>TEE OFF! ⛳</button>
 
           <button
             onClick={() => setMode('menu')}
             style={{
-              color: focusIdx === 4 ? '#ffffff' : '#64748b', fontFamily: 'monospace', fontSize: 12,
+              color: focusIdx === 3 ? '#ffffff' : '#64748b', fontFamily: 'monospace', fontSize: 12,
               background: 'none', border: 'none', cursor: 'pointer',
-              outline: focusIdx === 4 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 2, borderRadius: 4,
+              outline: focusIdx === 3 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 2, borderRadius: 4,
             }}
           >
-            ← Back {focusIdx === 4 ? '(A)' : ''}
+            ← Back {focusIdx === 3 ? '(A)' : ''}
           </button>
         </div>
       </div>

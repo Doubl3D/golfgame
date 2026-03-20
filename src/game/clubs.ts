@@ -9,26 +9,28 @@ export interface Club {
 }
 
 export const CLUBS: Club[] = [
-  // Woods
-  { name: 'Driver',     shortName: '1W',  maxRange: 250, launchAngle: 25,  maxPower: 30.1, spinFactor: 0.3, icon: '🏌' },
-  { name: '3 Wood',     shortName: '3W',  maxRange: 215, launchAngle: 28,  maxPower: 25.6, spinFactor: 0.4, icon: '🏌' },
-  { name: '5 Wood',     shortName: '5W',  maxRange: 195, launchAngle: 30,  maxPower: 23.3, spinFactor: 0.5, icon: '🏌' },
+  // Woods — low spin, ball runs out after landing
+  { name: 'Driver',     shortName: 'Dr',  maxRange: 250, launchAngle: 25,  maxPower: 30.1, spinFactor: 0.15, icon: '🏌' },
+  { name: '3 Wood',     shortName: '3W',  maxRange: 215, launchAngle: 28,  maxPower: 25.6, spinFactor: 0.20, icon: '🏌' },
+  { name: '5 Wood',     shortName: '5W',  maxRange: 195, launchAngle: 30,  maxPower: 23.3, spinFactor: 0.25, icon: '🏌' },
 
-  // Irons
-  { name: '3 Iron',     shortName: '3i',  maxRange: 180, launchAngle: 32,  maxPower: 21.5, spinFactor: 0.55, icon: '⛳' },
-  { name: '4 Iron',     shortName: '4i',  maxRange: 170, launchAngle: 34,  maxPower: 20.5, spinFactor: 0.6,  icon: '⛳' },
-  { name: '5 Iron',     shortName: '5i',  maxRange: 160, launchAngle: 36,  maxPower: 19.4, spinFactor: 0.65, icon: '⛳' },
-  { name: '6 Iron',     shortName: '6i',  maxRange: 150, launchAngle: 38,  maxPower: 18.4, spinFactor: 0.7,  icon: '⛳' },
-  { name: '7 Iron',     shortName: '7i',  maxRange: 140, launchAngle: 40,  maxPower: 17.4, spinFactor: 0.75, icon: '⛳' },
-  { name: '8 Iron',     shortName: '8i',  maxRange: 125, launchAngle: 43,  maxPower: 16,   spinFactor: 0.8,  icon: '⛳' },
-  { name: '9 Iron',     shortName: '9i',  maxRange: 110, launchAngle: 46,  maxPower: 14.7, spinFactor: 0.85, icon: '⛳' },
+  // Long irons — moderate spin, some roll
+  { name: '3 Iron',     shortName: '3i',  maxRange: 180, launchAngle: 32,  maxPower: 21.5, spinFactor: 0.35, icon: '⛳' },
+  { name: '4 Iron',     shortName: '4i',  maxRange: 170, launchAngle: 34,  maxPower: 20.5, spinFactor: 0.40, icon: '⛳' },
+  { name: '5 Iron',     shortName: '5i',  maxRange: 160, launchAngle: 36,  maxPower: 19.4, spinFactor: 0.45, icon: '⛳' },
+  { name: '6 Iron',     shortName: '6i',  maxRange: 150, launchAngle: 38,  maxPower: 18.4, spinFactor: 0.50, icon: '⛳' },
 
-  // Wedges
-  { name: 'Pitching Wedge', shortName: 'PW', maxRange: 100, launchAngle: 50, maxPower: 13.9, spinFactor: 0.9,  icon: '🔶' },
-  { name: 'Sand Wedge',     shortName: 'SW', maxRange: 70,  launchAngle: 56, maxPower: 11.3, spinFactor: 1.0,  icon: '🔶' },
+  // Short irons — high spin, ball stops quickly
+  { name: '7 Iron',     shortName: '7i',  maxRange: 140, launchAngle: 40,  maxPower: 17.4, spinFactor: 0.70, icon: '⛳' },
+  { name: '8 Iron',     shortName: '8i',  maxRange: 125, launchAngle: 43,  maxPower: 16,   spinFactor: 0.80, icon: '⛳' },
+  { name: '9 Iron',     shortName: '9i',  maxRange: 110, launchAngle: 46,  maxPower: 14.7, spinFactor: 0.90, icon: '⛳' },
+
+  // Wedges — very high spin, ball checks and rolls backward
+  { name: 'Pitching Wedge', shortName: 'PW', maxRange: 100, launchAngle: 50, maxPower: 13.9, spinFactor: 1.10, icon: '🔶' },
+  { name: 'Sand Wedge',     shortName: 'SW', maxRange: 70,  launchAngle: 56, maxPower: 11.3, spinFactor: 1.40, icon: '🔶' },
 
   // Putter
-  { name: 'Putter',     shortName: 'PT',  maxRange: 50,  launchAngle: 3,   maxPower: 9,    spinFactor: 0.0, icon: '🏒' },
+  { name: 'Putter',     shortName: 'Pt',  maxRange: 50,  launchAngle: 3,   maxPower: 9,    spinFactor: 0.0, icon: '🏒' },
 ];
 
 export function getClubIndex(name: string): number {

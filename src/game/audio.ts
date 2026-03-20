@@ -1,6 +1,30 @@
 let ctx: AudioContext | null = null;
 let running = false;
 let masterGain: GainNode | null = null;
+let _muted = false;
+let _volume = 0.18;
+let _birdsEnabled = true;
+
+export function isMuted(): boolean { return _muted; }
+
+export function setMuted(muted: boolean) {
+  _muted = muted;
+  if (masterGain) {
+    masterGain.gain.value = muted ? 0 : _volume;
+  }
+}
+
+export function toggleMute(): boolean {
+  setMuted(!_muted);
+  return _muted;
+}
+
+export function areBirdsEnabled(): boolean { return _birdsEnabled; }
+
+export function toggleBirds(): boolean {
+  _birdsEnabled = !_birdsEnabled;
+  return _birdsEnabled;
+}
 
 function getCtx(): AudioContext {
   if (!ctx) {
@@ -109,13 +133,15 @@ function scheduleAmbience() {
   if (!running || !ctx || !masterGain) return;
 
   const now = ctx.currentTime;
-  // Schedule ~4 seconds ahead
-  const scheduleUntil = now + 4;
+  // Schedule ~1.5 seconds ahead (short lookahead so toggle takes effect quickly)
+  const scheduleUntil = now + 1.5;
 
   while (nextScheduleTime < scheduleUntil) {
     // Bird call every 1.5–4 seconds
     const gap = 1.5 + Math.random() * 2.5;
-    scheduleBirdCall(ctx, masterGain, nextScheduleTime);
+    if (_birdsEnabled) {
+      scheduleBirdCall(ctx, masterGain, nextScheduleTime);
+    }
     nextScheduleTime += gap;
   }
 
@@ -133,9 +159,9 @@ export function startAmbience() {
   const audioCtx = getCtx();
   nextScheduleTime = audioCtx.currentTime + 0.1;
 
-  // Schedule immediately and then every 2 seconds
+  // Schedule immediately and then every second
   scheduleAmbience();
-  intervalId = setInterval(scheduleAmbience, 2000);
+  intervalId = setInterval(scheduleAmbience, 1000);
 }
 
 export function stopAmbience() {

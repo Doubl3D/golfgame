@@ -1,10 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { GameState, createInitialState, startHole, updateParticles, spawnSandParticles, spawnWaterParticles } from '../game/gameState';
-import { stepPhysics, launchBall, createBall } from '../game/physics';
-import { getSegmentAt, Difficulty } from '../game/terrain';
+import { Ball, stepPhysics, launchBall, createBall } from '../game/physics';
+import { getSegmentAt, Difficulty, TerrainSegment } from '../game/terrain';
 import { CLUBS, suggestClub } from '../game/clubs';
-import { Camera, updateCamera, uiScale, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawPowerMeter, drawYardageRuler, drawClubCarousel, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls, drawTouchControls } from '../game/renderer';
-import { startAmbience, stopAmbience, playSwingSound, playPutterSound, playHoleSunkSound, playSandSound, playWaterSound } from '../game/audio';
+import { Camera, updateCamera, uiScale, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawWindIndicator, drawPowerMeter, drawYardageRuler, drawClubCarousel, getClubCarouselLayout, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls, setLastInputMode } from '../game/renderer';
+import { startAmbience, stopAmbience, playSwingSound, playPutterSound, playHoleSunkSound, playSandSound, playWaterSound, isMuted, toggleMute, areBirdsEnabled, toggleBirds } from '../game/audio';
 import { MultiplayerConnection, NetMessage, rejoinSession } from '../game/multiplayer';
 
 interface GolfGameProps {
@@ -50,6 +50,9 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   const [disconnected, setDisconnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [droppedNames, setDroppedNames] = useState<string[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [muted, setMuted] = useState(isMuted());
+  const [birdsOn, setBirdsOn] = useState(areBirdsEnabled());
 
   const getCanvasSize = () => ({
     width: window.innerWidth,
@@ -68,12 +71,39 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     multiplayer?.sendMessage(msg);
   }, [multiplayer]);
 
+  // ========== HELPERS ==========
+
+  /** Returns true if the current player's ball is sitting on sand */
+  function isBallOnSand(): boolean {
+    const state = stateRef.current;
+    if (!state.holeData || !state.ball) return false;
+    const seg = getSegmentAt(state.holeData.segments, state.ball.x);
+    return seg.type === 'sand';
+  }
+
+  /** Clamp club index, skipping putter when on sand */
+  function clampClubIndex(idx: number): number {
+    const maxIdx = isBallOnSand() ? CLUBS.length - 2 : CLUBS.length - 1;
+    return Math.max(0, Math.min(maxIdx, idx));
+  }
+
+  /** Suggest club and clamp putter if on sand */
+  function suggestClubClamped(ydsLeft: number, segments: TerrainSegment[], ballX: number): number {
+    let idx = suggestClub(ydsLeft);
+    const seg = getSegmentAt(segments, ballX);
+    if (seg.type === 'sand' && idx === CLUBS.length - 1) {
+      idx = CLUBS.length - 2; // Sand Wedge instead of Putter
+    }
+    return idx;
+  }
+
   // ========== INPUT HANDLERS ==========
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     keysRef.current.add(e.code);
     e.preventDefault();
     startAmbience();
+    setLastInputMode('keyboard');
 
     const state = stateRef.current;
 
@@ -85,8 +115,8 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     if (state.showScorecard) return;
 
     if (state.phase === 'aiming' && isMyTurn()) {
-      if (e.code === 'KeyQ' || e.code === 'ArrowUp') {
-        const newIdx = Math.max(0, state.selectedClubIndex - 1);
+      if (e.code === 'ArrowUp') {
+        const newIdx = clampClubIndex(state.selectedClubIndex - 1);
         const newClub = CLUBS[newIdx];
         const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
@@ -96,8 +126,8 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         };
         return;
       }
-      if (e.code === 'KeyE' || e.code === 'ArrowDown') {
-        const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+      if (e.code === 'ArrowDown') {
+        const newIdx = clampClubIndex(state.selectedClubIndex + 1);
         const newClub = CLUBS[newIdx];
         const aimingBackward = state.aimAngle > 90;
         stateRef.current = {
@@ -145,7 +175,6 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   const mouseHeldRef = useRef(false);
   const rollingFramesRef = useRef(0);
   const isTouchDevice = useRef(false);
-  const touchAimRef = useRef<'left' | 'right' | null>(null);
 
   // Gamepad state
   const gamepadPrevRef = useRef<{ buttons: boolean[] }>({ buttons: [] });
@@ -158,44 +187,30 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     const state = stateRef.current;
     if (state.showScorecard) return;
 
-    // Check if touch hit a UI button (only on touch devices during aiming)
-    if (isTouchDevice.current && state.phase === 'aiming' && isMyTurn()) {
+    // Check if click/touch hit a club arrow button (during aiming)
+    if (state.phase === 'aiming' && isMyTurn()) {
       const canvas = canvasRef.current;
       if (canvas) {
         const w = canvas.width;
         const h = canvas.height;
-        const btnSize = 56;
-        const btnMargin = 12;
+        const { size: clubSize, x: clubX, y: clubY, btnSize, btnGap, dnExtraOffset } = getClubCarouselLayout(h);
 
-        // Club up button: above club carousel
-        const clubUpX = 16, clubUpY = h - 140 - btnSize - btnMargin;
-        if (clientX >= clubUpX && clientX <= clubUpX + btnSize && clientY >= clubUpY && clientY <= clubUpY + btnSize) {
-          const newIdx = Math.max(0, state.selectedClubIndex - 1);
+        // Up arrow button (longer club)
+        const upY = clubY - btnSize - btnGap;
+        if (clientX >= clubX && clientX <= clubX + clubSize && clientY >= upY && clientY <= upY + btnSize) {
+          const newIdx = clampClubIndex(state.selectedClubIndex - 1);
           const newClub = CLUBS[newIdx];
           const aimingBackward = state.aimAngle > 90;
           stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
           return;
         }
-        // Club down button: below club carousel
-        const clubDnX = 16, clubDnY = h - 140 + 64 + btnMargin;
-        if (clientX >= clubDnX && clientX <= clubDnX + btnSize && clientY >= clubDnY && clientY <= clubDnY + btnSize) {
-          const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+        // Down arrow button (shorter club)
+        const dnY = clubY + clubSize + btnGap + dnExtraOffset;
+        if (clientX >= clubX && clientX <= clubX + clubSize && clientY >= dnY && clientY <= dnY + btnSize) {
+          const newIdx = clampClubIndex(state.selectedClubIndex + 1);
           const newClub = CLUBS[newIdx];
           const aimingBackward = state.aimAngle > 90;
           stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
-          return;
-        }
-        // Aim left button: bottom-right area
-        const aimBtnY = h - btnSize - btnMargin;
-        const aimLeftX = w - btnSize * 2 - btnMargin * 2;
-        if (clientX >= aimLeftX && clientX <= aimLeftX + btnSize && clientY >= aimBtnY && clientY <= aimBtnY + btnSize) {
-          touchAimRef.current = 'left';
-          return;
-        }
-        // Aim right button
-        const aimRightX = w - btnSize - btnMargin;
-        if (clientX >= aimRightX && clientX <= aimRightX + btnSize && clientY >= aimBtnY && clientY <= aimBtnY + btnSize) {
-          touchAimRef.current = 'right';
           return;
         }
       }
@@ -246,7 +261,6 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
 
   function handlePointerUp() {
     mouseHeldRef.current = false;
-    touchAimRef.current = null;
     const state = stateRef.current;
     if (state.phase === 'powering' && mouseDownRef.current && isMyTurn()) {
       doLaunch();
@@ -255,6 +269,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   }
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setLastInputMode('mouse');
     handlePointerDown(e.clientX, e.clientY);
   }, [isMyTurn, sendMsg, isMultiplayer]);
 
@@ -270,6 +285,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
     isTouchDevice.current = true;
+    setLastInputMode('touch');
     const touch = e.touches[0];
     if (touch) handlePointerDown(touch.clientX, touch.clientY);
   }, [isMyTurn, sendMsg, isMultiplayer]);
@@ -290,8 +306,17 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     const s = stateRef.current;
     if (!s.ball || !s.holeData) return;
     const club = CLUBS[s.selectedClubIndex];
-    const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club);
+    const launchSeg = getSegmentAt(s.holeData.segments, s.ball.x);
+    const onSand = launchSeg.type === 'sand';
+    const newBall = launchBall(s.ball, s.aimAngle, s.power, s.wind.speed * s.wind.direction, club, onSand);
     if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
+
+    // Sand splash when hitting from sand
+    let particles = [...s.particles];
+    if (onSand && club.name !== 'Putter') {
+      particles = [...particles, ...spawnSandParticles(s.ball.x, s.ball.y)];
+      playSandSound();
+    }
 
     // Send shot to other player
     if (isMultiplayer) {
@@ -304,6 +329,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       phase: 'inFlight',
       powerActive: false,
       currentStrokes: s.currentStrokes + 1,
+      particles,
     };
   }
 
@@ -312,8 +338,18 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     const s = stateRef.current;
     if (!s.ball || !s.holeData) return;
     const club = CLUBS[clubIndex];
-    const newBall = launchBall(s.ball, aimAngle, power, s.wind.speed * s.wind.direction, club);
+    const launchSeg = getSegmentAt(s.holeData.segments, s.ball.x);
+    const onSand = launchSeg.type === 'sand';
+    const newBall = launchBall(s.ball, aimAngle, power, s.wind.speed * s.wind.direction, club, onSand);
     if (club.name === 'Putter') { playPutterSound(); } else { playSwingSound(); }
+
+    // Sand splash when hitting from sand
+    let particles = [...s.particles];
+    if (onSand && club.name !== 'Putter') {
+      particles = [...particles, ...spawnSandParticles(s.ball.x, s.ball.y)];
+      playSandSound();
+    }
+
     stateRef.current = {
       ...s,
       ball: newBall,
@@ -323,6 +359,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       phase: 'inFlight',
       powerActive: false,
       currentStrokes: s.currentStrokes + 1,
+      particles,
     };
   }
 
@@ -554,6 +591,9 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
 
       // Save current button state for next frame edge detection
       gamepadPrevRef.current = { buttons: gp.buttons.map(b => b.pressed) };
+      if (result.anyButton || Math.abs(result.stickX) > 0.3 || Math.abs(result.stickY) > 0.3) {
+        setLastInputMode('gamepad');
+      }
       return result;
     }
 
@@ -617,8 +657,8 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         const aimSpeed = 1.2;
 
         let dAngle = 0;
-        if (keys.has('ArrowLeft') || keys.has('KeyA') || touchAimRef.current === 'left') dAngle = aimSpeed;
-        if (keys.has('ArrowRight') || keys.has('KeyD') || touchAimRef.current === 'right') dAngle = -aimSpeed;
+        if (keys.has('ArrowLeft') || keys.has('KeyA')) dAngle = aimSpeed;
+        if (keys.has('ArrowRight') || keys.has('KeyD')) dAngle = -aimSpeed;
 
         // Gamepad aim: left stick or d-pad
         if (gp) {
@@ -627,14 +667,14 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
 
           // Club selection: LB/RB or D-pad up/down
           if (gp.lbPressed || gp.dUp) {
-            const newIdx = Math.max(0, state.selectedClubIndex - 1);
+            const newIdx = clampClubIndex(state.selectedClubIndex - 1);
             const newClub = CLUBS[newIdx];
             const aimingBackward = state.aimAngle > 90;
             stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
             state = stateRef.current;
           }
           if (gp.rbPressed || gp.dDown) {
-            const newIdx = Math.min(CLUBS.length - 1, state.selectedClubIndex + 1);
+            const newIdx = clampClubIndex(state.selectedClubIndex + 1);
             const newClub = CLUBS[newIdx];
             const aimingBackward = state.aimAngle > 90;
             stateRef.current = { ...state, selectedClubIndex: newIdx, aimAngle: aimingBackward ? 180 - newClub.launchAngle : newClub.launchAngle };
@@ -762,7 +802,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
           if (!nextBall) return;
           const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
           const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - nextBall.x) * ypp));
-          const sugIdx = suggestClub(ydsLeft);
+          const sugIdx = suggestClubClamped(ydsLeft, holeData.segments, nextBall.x);
           const pastHole = nextBall.x > holeData.holeX;
           const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
           stateRef.current = {
@@ -805,75 +845,90 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
           const updatedPlayerBalls = [...state.playerBalls];
           updatedPlayerBalls[state.currentPlayerIdx] = safeBall;
 
-          if (isMultiplayer && state.players.length > 1) {
-            const nextIdx = findNextPlayer();
-            if (nextIdx >= 0 && nextIdx !== state.currentPlayerIdx) {
-              state = { ...state, currentStrokes: penaltyStrokes, playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls, particles: newParticles };
-              stateRef.current = state;
-              switchToPlayer(nextIdx);
-            } else {
-              const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-              const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - safeBall.x) * ypp));
-              const sugIdx = suggestClub(ydsLeft);
-              const pastHole = safeBall.x > holeData.holeX;
-              const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-              stateRef.current = {
-                ...state, ball: safeBall, phase: 'aiming', currentStrokes: penaltyStrokes,
-                particles: newParticles, selectedClubIndex: sugIdx, aimAngle: sugAngle,
-                playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls,
-              };
-            }
-          } else {
-            const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-            const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
-            const sugIdx = suggestClub(ydsLeft);
-            const pastHole = ball.x > holeData.holeX;
-            const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-            stateRef.current = {
-              ...state, ball, phase: 'aiming', currentStrokes: penaltyStrokes,
-              particles: newParticles, selectedClubIndex: sugIdx, aimAngle: sugAngle,
-              playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls,
-            };
-          }
+          stateRef.current = {
+            ...state, ball: safeBall, phase: 'settled', settledTimer: 90, // ~1 second at 90fps
+            currentStrokes: penaltyStrokes, particles: newParticles,
+            playerStrokes: updatedPlayerStrokes, playerBalls: updatedPlayerBalls,
+          };
         } else if (landed) {
           const updatedPlayerBalls = [...state.playerBalls];
           updatedPlayerBalls[state.currentPlayerIdx] = { ...ball };
           const updatedPlayerStrokes = [...state.playerStrokes];
           updatedPlayerStrokes[state.currentPlayerIdx] = state.currentStrokes;
 
-          if (isMultiplayer && state.players.length > 1) {
-            const nextIdx = findNextPlayer();
-            if (nextIdx >= 0 && nextIdx !== state.currentPlayerIdx) {
-              state = { ...state, playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes, particles: newParticles };
-              stateRef.current = state;
-              switchToPlayer(nextIdx);
-            } else {
-              const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-              const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
-              const sugIdx = suggestClub(ydsLeft);
-              const pastHole = ball.x > holeData.holeX;
-              const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-              stateRef.current = {
-                ...state, ball, phase: 'aiming', particles: newParticles,
-                selectedClubIndex: sugIdx, aimAngle: sugAngle,
-                playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
-              };
-            }
-          } else {
-            const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
-            const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - ball.x) * ypp));
-            const sugIdx = suggestClub(ydsLeft);
-            const pastHole = ball.x > holeData.holeX;
-            const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
-            stateRef.current = {
-              ...state, ball, phase: 'aiming', particles: newParticles,
-              selectedClubIndex: sugIdx, aimAngle: sugAngle,
-              playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
-            };
-          }
+          stateRef.current = {
+            ...state, ball, phase: 'settled', settledTimer: 90, // ~1 second at 90fps
+            particles: newParticles,
+            playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
+          };
         } else {
+          // Ball still moving — stay in flight/rolling
           const newPhase = ball.rolling ? 'rolling' : 'inFlight';
           stateRef.current = { ...state, ball, phase: newPhase, particles: newParticles };
+        }
+
+        state = stateRef.current;
+      }
+
+      // Handle settled phase countdown
+      if (state.phase === 'settled') {
+        stateRef.current = {
+          ...state,
+          settledTimer: state.settledTimer - 1,
+          particles: updateParticles(state.particles),
+        };
+        state = stateRef.current;
+
+        if (state.settledTimer <= 0) {
+          const ball = state.ball!;
+
+          // Find next unsunk player (for multiplayer turn switch)
+          const findNext = () => {
+            const n = state.players.length;
+            for (let i = 1; i <= n; i++) {
+              const idx = (state.currentPlayerIdx + i) % n;
+              if (!state.playerSunk[idx] && !droppedPlayersRef.current.has(idx)) return idx;
+            }
+            return -1;
+          };
+
+          const transitionToAiming = (aimBall: Ball) => {
+            const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+            const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - aimBall.x) * ypp));
+            const sugIdx = suggestClubClamped(ydsLeft, holeData.segments, aimBall.x);
+            const pastHole = aimBall.x > holeData.holeX;
+            const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+            stateRef.current = {
+              ...state, ball: aimBall, phase: 'aiming',
+              selectedClubIndex: sugIdx, aimAngle: sugAngle,
+            };
+          };
+
+          if (isMultiplayer && state.players.length > 1) {
+            const nextIdx = findNext();
+            if (nextIdx >= 0 && nextIdx !== state.currentPlayerIdx) {
+              const nextBall = state.playerBalls[nextIdx];
+              if (nextBall) {
+                const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
+                const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - nextBall.x) * ypp));
+                const sugIdx = suggestClubClamped(ydsLeft, holeData.segments, nextBall.x);
+                const pastHole = nextBall.x > holeData.holeX;
+                const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
+                stateRef.current = {
+                  ...state,
+                  currentPlayerIdx: nextIdx,
+                  ball: { ...nextBall, atRest: true, rolling: false, inFlight: false, vx: 0, vy: 0 },
+                  currentStrokes: state.playerStrokes[nextIdx],
+                  phase: 'aiming',
+                  selectedClubIndex: sugIdx, aimAngle: sugAngle,
+                };
+              }
+            } else {
+              transitionToAiming(ball);
+            }
+          } else {
+            transitionToAiming(ball);
+          }
         }
         state = stateRef.current;
       }
@@ -912,7 +967,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
               if (nextBall) {
                 const ypp = holeData.distance / (holeData.holeX - holeData.teeX);
                 const ydsLeft = Math.max(0, Math.round(Math.abs(holeData.holeX - nextBall.x) * ypp));
-                const sugIdx = suggestClub(ydsLeft);
+                const sugIdx = suggestClubClamped(ydsLeft, holeData.segments, nextBall.x);
                 const pastHole = nextBall.x > holeData.holeX;
                 const sugAngle = pastHole ? 180 - CLUBS[sugIdx].launchAngle : CLUBS[sugIdx].launchAngle;
                 stateRef.current = {
@@ -963,11 +1018,15 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       drawParticles(ctx, state.particles, camera);
 
       // Draw other players' ball markers (before active ball so active is on top)
+      // Skip markers for balls still on the tee
       for (let pi = 0; pi < state.players.length; pi++) {
         if (pi === state.currentPlayerIdx) continue; // skip active player
         const otherBall = state.playerBalls[pi];
         if (otherBall && !state.playerSunk[pi]) {
-          drawBallMarker(ctx, otherBall, camera, state.players[pi].color, state.players[pi].name);
+          const onTee = Math.abs(otherBall.x - holeData.teeX) < 5 && Math.abs(otherBall.y - (holeData.teeY - 10)) < 5;
+          if (!onTee) {
+            drawBallMarker(ctx, otherBall, camera, state.players[pi].color, state.players[pi].name);
+          }
         }
       }
 
@@ -980,14 +1039,12 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
 
       drawHUD(ctx, state, width, height);
       drawControls(ctx, state, width, height);
-      if (isTouchDevice.current) {
-        drawTouchControls(ctx, state, width, height);
-      }
 
       if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
         drawClubCarousel(ctx, state.selectedClubIndex, width, height);
+        drawWindIndicator(ctx, state, width, height);
         if (state.ball && state.holeData) {
-          drawYardageRuler(ctx, state.ball, state.holeData, width, height);
+          drawYardageRuler(ctx, state.ball, state.holeData, width, height, state.players[state.currentPlayerIdx]?.color);
         }
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
@@ -1012,7 +1069,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       }
 
       if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
-        drawYardageRuler(ctx, state.ball, state.holeData, width, height);
+        drawYardageRuler(ctx, state.ball, state.holeData, width, height, state.players[state.currentPlayerIdx]?.color);
         if (mouseHeldRef.current || rollingFramesRef.current > 180) {
           const s = uiScale(height);
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -1119,6 +1176,10 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     if (disconnectedRef.current) {
       stopAmbience();
       onBackToMenu();
+      return;
+    }
+    if (stateRef.current.showScorecard) {
+      stateRef.current = { ...stateRef.current, showScorecard: false };
     }
   }, [onBackToMenu]);
 
@@ -1141,12 +1202,59 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         className="block cursor-crosshair"
         style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' } as React.CSSProperties}
       />
+      {/* Hamburger menu button */}
       <button
-        onClick={() => { stopAmbience(); multiplayer?.disconnect(); onBackToMenu(); }}
-        className="absolute top-3 right-3 text-xs text-white/60 hover:text-white/90 bg-black/40 px-3 py-1 rounded"
+        onClick={() => setMenuOpen(!menuOpen)}
+        className="absolute bottom-4 right-4 w-12 h-12 flex flex-col items-center justify-center gap-1.5 bg-black/50 hover:bg-black/70 rounded-lg border border-white/20"
       >
-        Menu
+        <span className="block w-6 h-0.5 bg-white/80" />
+        <span className="block w-6 h-0.5 bg-white/80" />
+        <span className="block w-6 h-0.5 bg-white/80" />
       </button>
+
+      {/* Menu overlay */}
+      {menuOpen && (
+        <div className="absolute bottom-18 right-4 bg-black/85 border border-white/20 rounded-lg p-3 flex flex-col gap-2 min-w-[160px]">
+          <button
+            onClick={() => {
+              const nowMuted = toggleMute();
+              setMuted(nowMuted);
+            }}
+            className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
+          >
+            {muted ? 'Sound: OFF' : 'Sound: ON'}
+          </button>
+          <button
+            onClick={() => {
+              const on = toggleBirds();
+              setBirdsOn(on);
+            }}
+            className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
+          >
+            {birdsOn ? 'Birds: ON' : 'Birds: OFF'}
+          </button>
+          <button
+            onClick={() => {
+              stateRef.current = { ...stateRef.current, showScorecard: !stateRef.current.showScorecard };
+              setMenuOpen(false);
+            }}
+            className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
+          >
+            Scorecard
+          </button>
+          <div className="border-t border-white/10 my-1" />
+          <button
+            onClick={() => {
+              stopAmbience();
+              multiplayer?.disconnect();
+              onBackToMenu();
+            }}
+            className="text-left text-sm text-red-400 hover:text-red-300 px-3 py-2 rounded hover:bg-white/10"
+          >
+            End Round
+          </button>
+        </div>
+      )}
     </div>
   );
 }

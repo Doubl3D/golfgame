@@ -285,46 +285,49 @@ export function drawTerrain(
     ctx.closePath();
 
     if (seg.type === 'water') {
-      // Dark murky water - clearly different from sky
+      // Blue water with depth gradient
       const waterGrad = ctx.createLinearGradient(0, 180, 0, canvasHeight);
-      waterGrad.addColorStop(0, '#2d5a1a');   // dark swampy green surface
-      waterGrad.addColorStop(0.15, '#1e3d10');
-      waterGrad.addColorStop(0.5, '#0f2008');  // very dark below
-      waterGrad.addColorStop(1, '#080f04');
+      waterGrad.addColorStop(0, '#1a6fa0');   // bright blue surface
+      waterGrad.addColorStop(0.2, '#145a85');
+      waterGrad.addColorStop(0.5, '#0d3d5c');  // deeper blue
+      waterGrad.addColorStop(1, '#061e2e');
       ctx.fillStyle = waterGrad;
       ctx.fill();
 
-      // Muddy surface glint
-      ctx.strokeStyle = 'rgba(80,140,30,0.5)';
-      ctx.lineWidth = 2;
-      const time = Date.now() * 0.0015;
-      for (let wx = sx; wx < ex; wx += 18) {
+      // Animated wave highlights on the surface
+      const time = Date.now() * 0.002;
+      ctx.strokeStyle = 'rgba(120,200,255,0.4)';
+      ctx.lineWidth = 1.5;
+      for (let wx = sx; wx < ex; wx += 14) {
         const wy = terrain[Math.min(wx, terrain.length - 1)] ?? 0;
+        const wave = Math.sin(time + wx * 0.05) * 2;
         ctx.beginPath();
-        ctx.moveTo(wx - camera.x, wy + Math.sin(time + wx * 0.04) * 1.5 + 2);
-        ctx.lineTo(wx + 12 - camera.x, wy + Math.sin(time + (wx + 12) * 0.04) * 1.5 + 2);
+        ctx.moveTo(wx - camera.x, wy + wave + 2);
+        ctx.quadraticCurveTo(wx + 7 - camera.x, wy + wave - 1, wx + 14 - camera.x, wy + wave + 2);
         ctx.stroke();
       }
 
-      // Bubbles / murk dots
-      ctx.fillStyle = 'rgba(40,90,10,0.4)';
-      const bubbleSeed = Math.floor(time * 0.3);
-      for (let wx = sx + 15; wx < ex - 15; wx += 40) {
+      // Second wave layer, offset
+      ctx.strokeStyle = 'rgba(180,230,255,0.25)';
+      for (let wx = sx + 7; wx < ex; wx += 20) {
         const wy = terrain[Math.min(wx, terrain.length - 1)] ?? 0;
-        const bx = wx + Math.sin(wx * 0.1 + bubbleSeed) * 8;
-        const by = wy + 12 + Math.sin(wx * 0.2 + time) * 6;
+        const wave = Math.sin(time * 0.8 + wx * 0.03 + 2) * 1.5;
         ctx.beginPath();
-        ctx.arc(bx - camera.x, by, 3, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(wx - camera.x, wy + wave + 5);
+        ctx.quadraticCurveTo(wx + 10 - camera.x, wy + wave + 3, wx + 20 - camera.x, wy + wave + 5);
+        ctx.stroke();
       }
 
-      // "HAZARD" label with warning style
-      const midX = (sx + ex) / 2 - camera.x;
-      const midTerrainY2 = terrain[Math.floor((sx + ex) / 2)] ?? 0;
-      ctx.font = 'bold 11px monospace';
-      ctx.fillStyle = 'rgba(255,80,80,0.85)';
-      ctx.textAlign = 'center';
-      ctx.fillText('⚠ WATER', midX, midTerrainY2 + 22);
+      // Subtle shimmer dots
+      ctx.fillStyle = 'rgba(150,220,255,0.2)';
+      for (let wx = sx + 10; wx < ex - 10; wx += 35) {
+        const wy = terrain[Math.min(wx, terrain.length - 1)] ?? 0;
+        const shimX = wx + Math.sin(wx * 0.1 + time * 1.2) * 6;
+        const shimY = wy + 8 + Math.sin(wx * 0.15 + time) * 4;
+        ctx.beginPath();
+        ctx.arc(shimX - camera.x, shimY, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else {
       // Gradient starts slightly above the terrain surface so the segment colour
       // is vivid right at the top edge of the polygon, not washed out.
@@ -335,16 +338,6 @@ export function drawTerrain(
       grad.addColorStop(1, '#3d2b1a');
       ctx.fillStyle = grad;
       ctx.fill();
-    }
-
-    // Terrain type label (skip water - handled above, skip fairway)
-    if (seg.type !== 'water' && seg.type !== 'fairway' && ex - sx > 80) {
-      const midX = (sx + ex) / 2 - camera.x;
-      const midTerrainY = terrain[Math.floor((sx + ex) / 2)] ?? 0;
-      ctx.font = 'bold 10px sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.textAlign = 'center';
-      ctx.fillText(seg.label.toUpperCase(), midX, midTerrainY + 18);
     }
 
     // Grass blades on non-water terrain
@@ -559,71 +552,89 @@ export function drawHUD(
   const player = state.players[state.currentPlayerIdx];
   if (!player || !state.holeData) return;
 
-  const s = uiScale(canvasHeight ?? 800);
-  const m = Math.round; // shorthand for rounding
+  // HUD is now just the wind indicator, positioned next to the club carousel
+  // (info box removed — hole/par/strokes/distance shown elsewhere)
+}
 
-  // Background panel
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  roundRect(ctx, m(6*s), m(6*s), m(200*s), m(76*s), m(6*s));
+export function drawWindIndicator(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  if (!state.holeData) return;
+
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+
+  // Position: right of club carousel
+  const clubSize = m(56 * s);
+  const x = m(12 * s) + clubSize + m(8 * s);
+  const y = canvasHeight - m(120 * s);
+  const size = clubSize; // square, same height as club selector
+
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  roundRect(ctx, x, y, size, size, m(8*s));
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 1;
-  roundRect(ctx, m(6*s), m(6*s), m(200*s), m(76*s), m(6*s));
-  ctx.stroke();
-
-  ctx.textAlign = 'left';
-  ctx.fillStyle = player.color;
-  ctx.font = `bold ${m(14*s)}px monospace`;
-  ctx.fillText(player.name, m(14*s), m(24*s));
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `${m(11*s)}px monospace`;
-  ctx.fillText(`Hole ${state.currentHole}/${state.totalHoles}  Par ${state.holeData.par}`, m(14*s), m(40*s));
-  ctx.fillText(`Strokes: ${state.currentStrokes}`, m(14*s), m(54*s));
-  let distLabel = `Dist: ${state.holeData.distance} yds`;
-  if (state.ball) {
-    const pxDist = Math.abs(state.holeData.holeX - state.ball.x);
-    const ypp = state.holeData.distance / (state.holeData.holeX - state.holeData.teeX);
-    const remaining = Math.max(0, Math.round(pxDist * ypp));
-    distLabel = `Dist: ${remaining} yds`;
-  }
-  ctx.fillText(distLabel, m(14*s), m(68*s));
-
-  // Wind indicator
-  const windW = m(130*s);
-  const windH = m(42*s);
-  const windX = canvasWidth - windW - m(10*s);
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  roundRect(ctx, windX, m(6*s), windW, windH, m(6*s));
-  ctx.fill();
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${m(11*s)}px monospace`;
-  ctx.textAlign = 'center';
-  ctx.fillText('WIND', windX + windW/2, m(20*s));
-
-  const arrowDir = state.wind.direction;
-  const arrowLen = Math.min(m(40*s), state.wind.speed * m(5*s));
-  ctx.strokeStyle = '#fbbf24';
+  ctx.strokeStyle = '#60a5fa';
   ctx.lineWidth = m(2*s);
-  ctx.beginPath();
-  ctx.moveTo(windX + windW/2 - arrowLen/2, m(33*s));
-  ctx.lineTo(windX + windW/2 + arrowLen/2 * arrowDir, m(33*s));
+  roundRect(ctx, x, y, size, size, m(8*s));
   ctx.stroke();
 
-  const ax = windX + windW/2 + arrowLen/2 * arrowDir;
-  ctx.beginPath();
-  ctx.moveTo(ax, m(33*s));
-  ctx.lineTo(ax - m(5*s) * arrowDir, m(28*s));
-  ctx.lineTo(ax - m(5*s) * arrowDir, m(38*s));
-  ctx.closePath();
-  ctx.fillStyle = '#fbbf24';
-  ctx.fill();
-
+  // "WIND" label
   ctx.fillStyle = '#ffffff';
-  ctx.font = `${m(9*s)}px monospace`;
+  ctx.font = `bold ${m(12*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(state.wind.label, windX + windW/2, m(46*s));
+  ctx.fillText('WIND', x + size/2, y + m(14*s));
+
+  // Determine arrow count: 1 = light, 2 = strong, 3 = crazy
+  const speed = state.wind.speed;
+  const numArrows = speed >= 6 ? 3 : speed >= 3 ? 2 : 1;
+  const arrowDir = state.wind.direction;
+  const centerX = x + size / 2;
+  const centerY = y + size / 2 + m(2*s);
+  const arrowW = m(10 * s);  // width of each chevron (back to tip)
+  const arrowH = m(8 * s);   // half-height of chevron
+  const step = m(8 * s);     // spacing between arrow origins
+
+  // Total span from first arrow back to last arrow tip
+  const totalSpan = (numArrows - 1) * step + arrowW;
+  // Offset so the group is centered in the box
+  const groupStart = centerX - (totalSpan / 2) * arrowDir;
+
+  for (let i = 0; i < numArrows; i++) {
+    const ax = groupStart + i * step * arrowDir;
+    ctx.beginPath();
+    ctx.moveTo(ax + arrowW * arrowDir, centerY);                 // tip
+    ctx.lineTo(ax - arrowW * 0.3 * arrowDir, centerY - arrowH); // top back
+    ctx.lineTo(ax, centerY);                                      // notch
+    ctx.lineTo(ax - arrowW * 0.3 * arrowDir, centerY + arrowH); // bottom back
+    ctx.closePath();
+    ctx.fillStyle = '#fbbf24';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = m(1.5*s);
+    ctx.stroke();
+  }
+
+  // Speed label (just the number)
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${m(10*s)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`${speed.toFixed(1)} mph`, x + size/2, y + size - m(4*s));
+}
+
+// Layout constants for club carousel (shared with hit-testing)
+export function getClubCarouselLayout(canvasHeight: number) {
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+  const size = m(56 * s);
+  const x = m(12 * s);
+  const y = canvasHeight - m(120 * s);
+  const btnSize = m(24 * s);
+  const btnGap = m(6 * s);
+  const dnExtraOffset = m(14 * s); // extra offset for club name text between selector and down button
+  return { s, size, x, y, btnSize, btnGap, dnExtraOffset };
 }
 
 export function drawClubCarousel(
@@ -632,12 +643,25 @@ export function drawClubCarousel(
   canvasWidth: number,
   canvasHeight: number
 ) {
-  const s = uiScale(canvasHeight);
+  const { s, size, x, y, btnSize, btnGap } = getClubCarouselLayout(canvasHeight);
   const m = Math.round;
   const club = CLUBS[selectedIndex];
-  const size = m(56 * s);
-  const x = m(12 * s);
-  const y = canvasHeight - m(120 * s);
+
+  // Up arrow button (longer club)
+  const upY = y - btnSize - btnGap;
+  ctx.fillStyle = selectedIndex > 0 ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.3)';
+  roundRect(ctx, x, upY, size, btnSize, m(6*s));
+  ctx.fill();
+  if (selectedIndex > 0) {
+    ctx.strokeStyle = '#4ade80';
+    ctx.lineWidth = m(1.5*s);
+    roundRect(ctx, x, upY, size, btnSize, m(6*s));
+    ctx.stroke();
+  }
+  ctx.fillStyle = selectedIndex > 0 ? '#ffffff' : '#555';
+  ctx.font = `bold ${m(14*s)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('▲', x + size/2, upY + btnSize/2 + m(5*s));
 
   // Square background
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -650,28 +674,36 @@ export function drawClubCarousel(
 
   // Club short name
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${m(18*s)}px monospace`;
+  ctx.font = `bold ${m(20*s)}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(club.shortName, x + size/2, y + m(24*s));
+  ctx.fillText(club.shortName, x + size/2, y + m(26*s));
 
   // Range
   ctx.fillStyle = '#4ade80';
-  ctx.font = `bold ${m(10*s)}px monospace`;
-  ctx.fillText(`${club.maxRange}y`, x + size/2, y + m(38*s));
+  ctx.font = `bold ${m(11*s)}px monospace`;
+  ctx.fillText(`${club.maxRange}y`, x + size/2, y + m(42*s));
 
-  // Up/down hints
-  ctx.fillStyle = selectedIndex > 0 ? '#94a3b8' : '#333';
-  ctx.font = `${m(9*s)}px monospace`;
-  ctx.fillText('▲ Q', x + size/2, y + m(50*s));
-
-  ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? '#94a3b8' : '#333';
-  ctx.fillText('▼ E', x + size/2, y - m(3*s));
-
-  // Club name to the right
+  // Club name below selector, above down arrow
   ctx.fillStyle = '#94a3b8';
   ctx.font = `${m(10*s)}px monospace`;
-  ctx.textAlign = 'left';
-  ctx.fillText(club.name, x + size + m(8*s), y + size/2 + m(4*s));
+  ctx.textAlign = 'center';
+  ctx.fillText(club.name, x + size/2, y + size + m(12*s));
+
+  // Down arrow button (shorter club)
+  const dnY = y + size + btnGap + m(14*s);
+  ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.3)';
+  roundRect(ctx, x, dnY, size, btnSize, m(6*s));
+  ctx.fill();
+  if (selectedIndex < CLUBS.length - 1) {
+    ctx.strokeStyle = '#4ade80';
+    ctx.lineWidth = m(1.5*s);
+    roundRect(ctx, x, dnY, size, btnSize, m(6*s));
+    ctx.stroke();
+  }
+  ctx.fillStyle = selectedIndex < CLUBS.length - 1 ? '#ffffff' : '#555';
+  ctx.font = `bold ${m(14*s)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('▼', x + size/2, dnY + btnSize/2 + m(5*s));
 }
 
 export function drawYardageRuler(
@@ -679,7 +711,8 @@ export function drawYardageRuler(
   ball: Ball,
   holeData: HoleData,
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  playerColor: string = '#ffffff'
 ) {
   const pixelDist = Math.abs(holeData.holeX - ball.x);
   const yardsPerPixel = holeData.distance / (holeData.holeX - holeData.teeX);
@@ -687,71 +720,87 @@ export function drawYardageRuler(
 
   const s = uiScale(canvasHeight);
   const m = Math.round;
-  const rulerW = m(220*s);
-  const rulerH = m(12*s);
-  const rx = canvasWidth / 2 - rulerW / 2;
-  const ry = canvasHeight - m(110*s);
+  const totalW = m(200*s);
+  const barH = m(6*s);
+  const iconR = m(5*s); // ball icon radius
+  const padding = m(16*s);
+  const bgW = totalW + padding * 2;
+  const bgH = m(32*s);
+  const bx = canvasWidth / 2 - bgW / 2;
+  const by = canvasHeight - m(105*s);
+  const barX = bx + padding;
+  const barY = by + bgH / 2 - barH / 2;
 
-  // Background
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  roundRect(ctx, rx - m(5*s), ry - m(14*s), rulerW + m(10*s), rulerH + m(24*s), m(5*s));
+  // Background pill
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, bx, by, bgW, bgH, m(6*s));
   ctx.fill();
 
-  // Yardage label
-  ctx.fillStyle = '#b0b0b0';
-  ctx.font = `${m(9*s)}px monospace`;
-  ctx.textAlign = 'center';
-  ctx.fillText(`${yardsRemaining} yds to pin`, canvasWidth / 2, ry - m(4*s));
-
-  // Ruler track
+  // Track
   ctx.fillStyle = '#1a1a1a';
-  roundRect(ctx, rx, ry, rulerW, rulerH, m(3*s));
+  roundRect(ctx, barX, barY, totalW, barH, m(3*s));
   ctx.fill();
 
-  // Fill representing remaining distance
+  // Green fill from ball toward pin
   const totalYards = holeData.distance;
   const ratio = Math.min(1, yardsRemaining / totalYards);
-  const fillW = ratio * rulerW;
-
-  if (fillW > 0) {
-    const rGrad = ctx.createLinearGradient(rx, 0, rx + rulerW, 0);
-    rGrad.addColorStop(0, '#22c55e');
-    rGrad.addColorStop(0.5, '#86efac');
-    rGrad.addColorStop(1, '#ffffff');
-    ctx.fillStyle = rGrad;
-    roundRect(ctx, rx, ry, fillW, rulerH, m(3*s));
+  const ballPos = barX + (1 - ratio) * totalW; // ball position on bar
+  const fillW = totalW - (1 - ratio) * totalW;
+  if (fillW > 1) {
+    const grd = ctx.createLinearGradient(ballPos, 0, barX + totalW, 0);
+    grd.addColorStop(0, '#22c55e');
+    grd.addColorStop(1, '#065f46');
+    ctx.fillStyle = grd;
+    roundRect(ctx, ballPos, barY, fillW, barH, m(3*s));
     ctx.fill();
   }
 
-  // Tick marks
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-  ctx.lineWidth = 1;
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = `${m(6*s)}px monospace`;
-  ctx.textAlign = 'center';
-  const step = 50;
-  for (let y = step; y < totalYards; y += step) {
-    const tickX = rx + (y / totalYards) * rulerW;
-    ctx.beginPath();
-    ctx.moveTo(tickX, ry);
-    ctx.lineTo(tickX, ry + rulerH);
-    ctx.stroke();
-  }
-
   // Border
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
   ctx.lineWidth = 1;
-  roundRect(ctx, rx, ry, rulerW, rulerH, m(3*s));
+  roundRect(ctx, barX, barY, totalW, barH, m(3*s));
   ctx.stroke();
 
-  // Pin flag icon at the right end
+  // Ball icon (left side, at ball position)
+  const ballCx = Math.max(barX + iconR, Math.min(ballPos, barX + totalW - iconR));
+  const ballCy = by + bgH / 2;
+  const ballGrad = ctx.createRadialGradient(ballCx - m(1*s), ballCy - m(1*s), 0, ballCx, ballCy, iconR);
+  ballGrad.addColorStop(0, '#ffffff');
+  ballGrad.addColorStop(0.5, playerColor);
+  ballGrad.addColorStop(1, adjustColor(playerColor, -40));
+  ctx.beginPath();
+  ctx.arc(ballCx, ballCy, iconR, 0, Math.PI * 2);
+  ctx.fillStyle = ballGrad;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = m(1*s);
+  ctx.stroke();
+
+  // Pin flag icon (right end)
+  const pinX = barX + totalW + m(2*s);
+  const pinTop = by + m(4*s);
+  const pinBot = by + bgH - m(4*s);
+  // Pole
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = m(1.5*s);
+  ctx.beginPath();
+  ctx.moveTo(pinX, pinBot);
+  ctx.lineTo(pinX, pinTop);
+  ctx.stroke();
+  // Flag
   ctx.fillStyle = '#ef4444';
   ctx.beginPath();
-  ctx.moveTo(rx + rulerW - 2, ry + 1);
-  ctx.lineTo(rx + rulerW - 2, ry + rulerH - 1);
-  ctx.lineTo(rx + rulerW - 8, ry + rulerH / 2);
+  ctx.moveTo(pinX, pinTop);
+  ctx.lineTo(pinX - m(8*s), pinTop + m(4*s));
+  ctx.lineTo(pinX, pinTop + m(8*s));
   ctx.closePath();
   ctx.fill();
+
+  // Distance text centered
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${m(10*s)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`${yardsRemaining} yds`, canvasWidth / 2, by - m(3*s));
 }
 
 export function drawPowerMeter(
@@ -811,10 +860,6 @@ export function drawPowerMeter(
     ctx.moveTo(capX, my - m(3*s));
     ctx.lineTo(capX, my + meterH + m(3*s));
     ctx.stroke();
-    ctx.fillStyle = '#ff4444';
-    ctx.font = `bold ${m(9*s)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText(powerCap <= 0.5 ? 'SAND' : 'ROUGH', capX, my - m(5*s));
   }
 
   // Border
@@ -971,111 +1016,260 @@ export function drawScorecard(
   canvasWidth: number,
   canvasHeight: number
 ) {
+  const s = uiScale(canvasHeight);
+  const m = Math.round;
+
+  // Dim background
   ctx.fillStyle = 'rgba(0,0,0,0.85)';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  const cardW = Math.min(canvasWidth - 40, 700);
-  const cardH = Math.min(canvasHeight - 60, 500);
+  const numHoles = state.totalHoles;
+  const numPlayers = state.players.length;
+  const nameColW = m(90 * s);
+  const totColW = m(44 * s);
+  const colW = m(Math.min(36 * s, (canvasWidth - 60 - nameColW - totColW) / numHoles));
+  const rowH = m(32 * s);
+  const numRows = 3 + numPlayers; // header + yds + par + players
+  const tableW = nameColW + numHoles * colW + totColW;
+  const tableH = numRows * rowH;
+  const cardPadX = m(20 * s);
+  const cardPadTop = m(50 * s);
+  const cardPadBot = m(40 * s);
+  const cardW = tableW + cardPadX * 2;
+  const cardH = tableH + cardPadTop + cardPadBot;
   const cx = canvasWidth / 2 - cardW / 2;
   const cy = canvasHeight / 2 - cardH / 2;
+  const tableX = cx + cardPadX;
+  const tableY = cy + cardPadTop;
 
-  ctx.fillStyle = '#0f1a0f';
-  roundRect(ctx, cx, cy, cardW, cardH, 12);
+  // Handwriting-style font (cursive fallback chain)
+  const handFont = (size: number, bold = false) =>
+    `${bold ? 'bold ' : ''}${m(size * s)}px 'Segoe Script', 'Comic Sans MS', 'Bradley Hand', cursive`;
+  const printFont = (size: number, bold = false) =>
+    `${bold ? 'bold ' : ''}${m(size * s)}px monospace`;
+
+  // === Card background: off-white paper ===
+  ctx.save();
+  // Shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 20;
+  ctx.shadowOffsetX = 4;
+  ctx.shadowOffsetY = 4;
+  ctx.fillStyle = '#f5f0e8';
+  roundRect(ctx, cx, cy, cardW, cardH, m(6 * s));
   ctx.fill();
-  ctx.strokeStyle = '#4ade80';
-  ctx.lineWidth = 2;
-  roundRect(ctx, cx, cy, cardW, cardH, 12);
-  ctx.stroke();
+  ctx.shadowColor = 'transparent';
+  ctx.restore();
 
-  ctx.fillStyle = '#4ade80';
-  ctx.font = 'bold 20px monospace';
+  // Subtle paper texture lines
+  ctx.strokeStyle = 'rgba(180,170,150,0.15)';
+  ctx.lineWidth = 0.5;
+  for (let ly = cy + 8; ly < cy + cardH - 4; ly += 6) {
+    ctx.beginPath();
+    ctx.moveTo(cx + 4, ly);
+    ctx.lineTo(cx + cardW - 4, ly);
+    ctx.stroke();
+  }
+
+  // Title
+  ctx.fillStyle = '#1a4d1a';
+  ctx.font = handFont(18, true);
   ctx.textAlign = 'center';
-  ctx.fillText('SCORECARD', canvasWidth / 2, cy + 32);
+  ctx.fillText('Scorecard', canvasWidth / 2, cy + m(28 * s));
 
-  ctx.fillStyle = '#64748b';
-  ctx.font = '12px monospace';
-  ctx.fillText('Press F to close', canvasWidth / 2, cy + 50);
-
-  const nameColW = 80;
-  const totColW = 40;
-  const holeAreaW = cardW - 40 - nameColW - totColW;
-  const colW = Math.min(holeAreaW / state.totalHoles, 40);
-  const rowH = 28;
-  const tableX = cx + 20;
-  const tableY = cy + 65;
+  // Subtitle
+  ctx.fillStyle = '#8a8070';
+  ctx.font = printFont(9);
+  ctx.fillText('Press F to close', canvasWidth / 2, cy + m(42 * s));
 
   // Helper: x position for hole column center
-  const holeX = (h: number) => tableX + nameColW + h * colW + colW / 2;
-  const totX = tableX + nameColW + state.totalHoles * colW + totColW / 2;
+  const holeColX = (h: number) => tableX + nameColW + h * colW + colW / 2;
+  const totX = tableX + nameColW + numHoles * colW + totColW / 2;
 
-  // Header row
-  ctx.fillStyle = '#1e3320';
-  ctx.fillRect(tableX, tableY, cardW - 40, rowH);
+  // === Draw grid lines ===
+  ctx.strokeStyle = '#b0a898';
+  ctx.lineWidth = 1;
 
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'bold 11px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText('Player', tableX + 5, tableY + 19);
+  // Outer border
+  ctx.strokeRect(tableX, tableY, tableW, tableH);
 
-  ctx.textAlign = 'center';
-  for (let h = 0; h < state.totalHoles; h++) {
-    ctx.fillText(`${h + 1}`, holeX(h), tableY + 19);
+  // Horizontal lines
+  for (let r = 1; r < numRows; r++) {
+    const ly = tableY + r * rowH;
+    ctx.beginPath();
+    ctx.moveTo(tableX, ly);
+    ctx.lineTo(tableX + tableW, ly);
+    ctx.stroke();
   }
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('TOT', totX, tableY + 19);
 
-  // Par row
-  const parY = tableY + rowH;
-  ctx.fillStyle = 'rgba(34,197,94,0.08)';
-  ctx.fillRect(tableX, parY, cardW - 40, rowH);
-  ctx.fillStyle = '#4ade80';
-  ctx.font = '11px monospace';
+  // Vertical: after name col
+  ctx.beginPath();
+  ctx.moveTo(tableX + nameColW, tableY);
+  ctx.lineTo(tableX + nameColW, tableY + tableH);
+  ctx.stroke();
+
+  // Vertical: between each hole
+  for (let h = 1; h <= numHoles; h++) {
+    const lx = tableX + nameColW + h * colW;
+    ctx.beginPath();
+    ctx.moveTo(lx, tableY);
+    ctx.lineTo(lx, tableY + tableH);
+    ctx.stroke();
+  }
+
+  // Vertical: before TOT
+  const totLineX = tableX + nameColW + numHoles * colW;
+  ctx.strokeStyle = '#8a8070';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(totLineX, tableY);
+  ctx.lineTo(totLineX, tableY + tableH);
+  ctx.stroke();
+
+  // Thicker line under header
+  ctx.strokeStyle = '#6a6050';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(tableX, tableY + rowH);
+  ctx.lineTo(tableX + tableW, tableY + rowH);
+  ctx.stroke();
+
+  // === Header row ===
+  ctx.fillStyle = 'rgba(30,80,30,0.08)';
+  ctx.fillRect(tableX + 1, tableY + 1, tableW - 2, rowH - 1);
+
+  ctx.fillStyle = '#3a5a3a';
+  ctx.font = printFont(10, true);
   ctx.textAlign = 'left';
-  ctx.fillText('Par', tableX + 5, parY + 19);
+  ctx.fillText('HOLE', tableX + m(6 * s), tableY + rowH / 2 + m(4 * s));
+
   ctx.textAlign = 'center';
+  for (let h = 0; h < numHoles; h++) {
+    ctx.fillText(`${h + 1}`, holeColX(h), tableY + rowH / 2 + m(4 * s));
+  }
+  ctx.font = printFont(10, true);
+  ctx.fillText('TOT', totX, tableY + rowH / 2 + m(4 * s));
+
+  // === Yardage row ===
+  const ydsY = tableY + rowH;
+  ctx.fillStyle = 'rgba(60,130,200,0.06)';
+  ctx.fillRect(tableX + 1, ydsY + 1, tableW - 2, rowH - 1);
+
+  ctx.fillStyle = '#3a5a8a';
+  ctx.font = printFont(10);
+  ctx.textAlign = 'left';
+  ctx.fillText('YDS', tableX + m(6 * s), ydsY + rowH / 2 + m(4 * s));
+
+  ctx.textAlign = 'center';
+  ctx.font = printFont(10);
+  let totalYds = 0;
+  for (let h = 0; h < numHoles; h++) {
+    const yds = state.allHoleData[h]?.distance ?? 0;
+    totalYds += yds;
+    ctx.fillText(`${yds}`, holeColX(h), ydsY + rowH / 2 + m(4 * s));
+  }
+  ctx.font = printFont(10, true);
+  ctx.fillText(`${totalYds}`, totX, ydsY + rowH / 2 + m(4 * s));
+
+  // === Par row ===
+  const parY = tableY + rowH * 2;
+  ctx.fillStyle = 'rgba(74,222,128,0.06)';
+  ctx.fillRect(tableX + 1, parY + 1, tableW - 2, rowH - 1);
+
+  ctx.fillStyle = '#2a6a2a';
+  ctx.font = printFont(10);
+  ctx.textAlign = 'left';
+  ctx.fillText('PAR', tableX + m(6 * s), parY + rowH / 2 + m(4 * s));
+
+  ctx.textAlign = 'center';
+  ctx.font = printFont(10);
   let totalPar = 0;
-  for (let h = 0; h < state.totalHoles; h++) {
+  for (let h = 0; h < numHoles; h++) {
     const par = state.allHoleData[h]?.par ?? 4;
     totalPar += par;
-    ctx.fillText(`${par}`, holeX(h), parY + 19);
+    ctx.fillText(`${par}`, holeColX(h), parY + rowH / 2 + m(4 * s));
   }
-  ctx.fillText(`${totalPar}`, totX, parY + 19);
+  ctx.font = printFont(10, true);
+  ctx.fillText(`${totalPar}`, totX, parY + rowH / 2 + m(4 * s));
 
-  // Player rows
+  // === Player rows ===
   state.players.forEach((player, pi) => {
     const ry = parY + (pi + 1) * rowH;
-    ctx.fillStyle = pi % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'transparent';
-    ctx.fillRect(tableX, ry, cardW - 40, rowH);
 
+    // Alternating subtle tint
+    if (pi % 2 === 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.02)';
+      ctx.fillRect(tableX + 1, ry + 1, tableW - 2, rowH - 1);
+    }
+
+    // Player name in their color (handwritten style)
     ctx.fillStyle = player.color;
-    ctx.font = 'bold 12px monospace';
+    ctx.font = handFont(12, true);
     ctx.textAlign = 'left';
-    ctx.fillText(player.name, tableX + 5, ry + 19);
+    // Slight y-jitter for handwritten feel
+    const nameJitter = ((pi * 7 + 3) % 5) - 2;
+    ctx.fillText(player.name, tableX + m(6 * s), ry + rowH / 2 + m(4 * s) + nameJitter * 0.5);
 
+    // Scores in handwriting font
     let total = 0;
-    ctx.font = '12px monospace';
-    for (let h = 0; h < state.totalHoles; h++) {
+    for (let h = 0; h < numHoles; h++) {
       const strokes = player.scores[h] ?? 0;
       total += strokes;
       ctx.textAlign = 'center';
 
       if (strokes === 0) {
-        ctx.fillStyle = '#334155';
-        ctx.fillText('-', holeX(h), ry + 19);
+        ctx.fillStyle = '#c0b8a8';
+        ctx.font = printFont(10);
+        ctx.fillText('-', holeColX(h), ry + rowH / 2 + m(4 * s));
       } else {
         const par = state.allHoleData[h]?.par ?? 4;
         const diff = strokes - par;
-        if (diff < 0) ctx.fillStyle = '#fbbf24';
-        else if (diff === 0) ctx.fillStyle = '#22c55e';
-        else ctx.fillStyle = '#ef4444';
-        ctx.fillText(`${strokes}`, holeX(h), ry + 19);
+
+        // Color-coded circle behind score for under/over par
+        if (diff < 0) {
+          // Birdie/eagle: circle the score (golf tradition)
+          ctx.strokeStyle = 'rgba(220,170,30,0.6)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(holeColX(h), ry + rowH / 2, m(10 * s), 0, Math.PI * 2);
+          ctx.stroke();
+          if (diff <= -2) {
+            // Double circle for eagle or better
+            ctx.beginPath();
+            ctx.arc(holeColX(h), ry + rowH / 2, m(13 * s), 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.fillStyle = '#8B6914';
+        } else if (diff === 0) {
+          ctx.fillStyle = '#2a5a2a';
+        } else {
+          // Bogey+: square around score (golf tradition)
+          ctx.strokeStyle = 'rgba(200,60,60,0.4)';
+          ctx.lineWidth = 1.5;
+          const sqSz = m(10 * s);
+          ctx.strokeRect(holeColX(h) - sqSz, ry + rowH / 2 - sqSz + m(1*s), sqSz * 2, sqSz * 2);
+          if (diff >= 2) {
+            // Double square for double bogey+
+            const sqSz2 = m(13 * s);
+            ctx.strokeRect(holeColX(h) - sqSz2, ry + rowH / 2 - sqSz2 + m(1*s), sqSz2 * 2, sqSz2 * 2);
+          }
+          ctx.fillStyle = '#a03030';
+        }
+
+        // The score number itself — handwritten
+        ctx.font = handFont(14, true);
+        // Slight random rotation/offset for handwritten feel
+        const xJit = ((h * 13 + pi * 7) % 5) - 2;
+        const yJit = ((h * 11 + pi * 3) % 3) - 1;
+        ctx.fillText(`${strokes}`, holeColX(h) + xJit * 0.5, ry + rowH / 2 + m(5 * s) + yJit * 0.5);
       }
     }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px monospace';
+    // Total column
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = handFont(14, true);
     ctx.textAlign = 'center';
-    ctx.fillText(`${total}`, totX, ry + 19);
+    ctx.fillText(`${total}`, totX, ry + rowH / 2 + m(5 * s));
   });
 }
 
@@ -1190,34 +1384,50 @@ export function drawGameOver(
   ctx.fillText('or press any key', canvasWidth / 2, btnY + btnH + 18);
 }
 
+export type InputMode = 'keyboard' | 'mouse' | 'gamepad' | 'touch';
+
+/** Detect which input device was used most recently */
+let _lastInputMode: InputMode = 'keyboard';
+export function setLastInputMode(mode: InputMode) { _lastInputMode = mode; }
+export function getLastInputMode(): InputMode { return _lastInputMode; }
+
 export function drawControls(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   canvasWidth: number,
   canvasHeight: number
 ) {
-  const lines: string[] = [];
-  const playerIdx = state.currentPlayerIdx;
-
-  const hasGamepad = !!navigator.getGamepads?.()?.find(g => g);
+  const mode = _lastInputMode;
+  let text = '';
 
   if (state.phase === 'aiming') {
-    lines.push(hasGamepad
-      ? '🎮 Stick/D-pad: Aim  |  LB/RB: Club  |  A: Power'
-      : '← → Aim  |  Q/E: Club  |  SPACE or LMB: Power');
+    if (mode === 'gamepad') {
+      text = '\uD83C\uDFAE Stick: Aim  |  LB/RB: Club  |  A: Swing';
+    } else if (mode === 'mouse') {
+      text = 'Hold LMB: Start swing  |  Drag: Aim  |  Release: Shoot';
+    } else if (mode === 'touch') {
+      text = 'Tap: Swing  |  Buttons: Aim & Club';
+    } else {
+      text = '\u2190 \u2192 Aim  |  \u2191 \u2193 Club  |  SPACE: Swing';
+    }
   } else if (state.phase === 'powering') {
-    lines.push(hasGamepad
-      ? '🎮 A: Launch!  |  Stick ↑↓: Fine aim'
-      : 'Drag ↑↓ to aim  |  Release to launch!');
+    if (mode === 'gamepad') {
+      text = '\uD83C\uDFAE A: Launch!';
+    } else if (mode === 'mouse') {
+      text = 'Release to launch!  |  Drag \u2191\u2193 to aim';
+    } else if (mode === 'touch') {
+      text = 'Tap to launch!';
+    } else {
+      text = 'SPACE: Launch!';
+    }
   }
 
-  if (lines.length === 0) return;
+  if (!text) return;
 
   const s = uiScale(canvasHeight);
   const m = Math.round;
-  const controlText = lines.join('  |  ');
   ctx.font = `${m(10*s)}px monospace`;
-  const textW = ctx.measureText(controlText).width;
+  const textW = ctx.measureText(text).width;
   const barW = Math.max(m(200*s), textW + m(20*s));
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -1225,7 +1435,7 @@ export function drawControls(
 
   ctx.fillStyle = '#94a3b8';
   ctx.textAlign = 'center';
-  ctx.fillText(controlText, canvasWidth / 2, canvasHeight - m(8*s));
+  ctx.fillText(text, canvasWidth / 2, canvasHeight - m(8*s));
 }
 
 export function drawTouchControls(

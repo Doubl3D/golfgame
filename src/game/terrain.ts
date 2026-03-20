@@ -199,33 +199,81 @@ export function generateHole(holeNumber: number, screenHeight?: number, difficul
     cursor = hz.endX;
   }
 
-  // Remaining fairway
-  if (cursor < fairwayEnd) {
+  // Remaining fairway to approach fringe
+  const approachFringeStart = fairwayEnd;
+  const approachFringeEnd = totalWidth - 450;
+  if (cursor < approachFringeStart) {
     segments.push({
-      type: 'fairway', startX: cursor, endX: fairwayEnd,
+      type: 'fairway', startX: cursor, endX: approachFringeStart,
       color: '#2d8a2d', friction: 0.87, label: 'Fairway',
     });
   }
 
-  // Fringe
+  // Approach fringe (before green)
   segments.push({
-    type: 'fringe', startX: fairwayEnd, endX: totalWidth - 400,
+    type: 'fringe', startX: approachFringeStart, endX: approachFringeEnd,
     color: '#3da03d', friction: 1.05, label: 'Fringe',
   });
 
-  // Green
+  // Green (around the hole)
+  const greenStart = approachFringeEnd;
+  const greenEnd = holeX + 100;
   segments.push({
-    type: 'green', startX: totalWidth - 400, endX: totalWidth,
+    type: 'green', startX: greenStart, endX: greenEnd,
     color: '#50c050', friction: 1.1, label: 'Green',
   });
 
-  // Flatten water hazards
-  for (const hz of hazards) {
-    if (hz.type === 'water') {
-      const waterMidY = (smoothed[Math.floor(hz.startX)] + smoothed[Math.min(Math.floor(hz.endX), smoothed.length - 1)]) / 2 + 10;
-      for (let i = Math.floor(hz.startX); i <= Math.min(Math.floor(hz.endX), smoothed.length - 1); i++) {
-        smoothed[i] = waterMidY;
-      }
+  // Back fringe (after hole)
+  const backFringeEnd = greenEnd + 80;
+  segments.push({
+    type: 'fringe', startX: greenEnd, endX: backFringeEnd,
+    color: '#3da03d', friction: 1.05, label: 'Fringe',
+  });
+
+  // Overshoot hazard after the hole — difficulty dependent
+  const overshootStart = backFringeEnd;
+  const overshootEnd = totalWidth;
+  if (difficulty === 'easy') {
+    // Easy: just rough behind the green
+    segments.push({
+      type: 'rough', startX: overshootStart, endX: overshootEnd,
+      color: '#1a5c1a', friction: 0.85, label: 'Rough',
+    });
+  } else if (difficulty === 'normal') {
+    // Normal: sand bunker behind green
+    segments.push({
+      type: 'sand', startX: overshootStart, endX: overshootEnd,
+      color: '#e8d5a3', friction: 0.5, label: 'Sand',
+    });
+  } else {
+    // Expert: water hazard behind green
+    segments.push({
+      type: 'water', startX: overshootStart, endX: overshootEnd,
+      color: '#1a6ba0', friction: 0, label: 'Water',
+    });
+  }
+
+  // Flatten water and overshoot sand hazards
+  const allWaterSegs = [...hazards.filter(h => h.type === 'water')];
+  // Add overshoot water on expert
+  if (difficulty === 'expert') {
+    allWaterSegs.push({ type: 'water', startX: overshootStart, endX: overshootEnd });
+  }
+  // Flatten overshoot sand on normal (same treatment as water — flat surface)
+  if (difficulty === 'normal') {
+    const s0 = Math.max(0, Math.floor(overshootStart));
+    const e0 = Math.min(Math.floor(overshootEnd), smoothed.length - 1);
+    const sandY = smoothed[s0];
+    for (let i = s0; i <= e0; i++) {
+      smoothed[i] = sandY;
+    }
+  }
+  for (const hz of allWaterSegs) {
+    const s0 = Math.max(0, Math.floor(hz.startX));
+    const e0 = Math.min(Math.floor(hz.endX), smoothed.length - 1);
+    const waterMidY = (smoothed[s0] + smoothed[e0]) / 2 + 10;
+    for (let i = s0; i <= e0; i++) {
+      smoothed[i] = waterMidY;
     }
   }
 

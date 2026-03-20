@@ -58,16 +58,18 @@ export function launchBall(
   angleDeg: number,
   power: number,
   windX: number,
-  club?: Club
+  club?: Club,
+  inSand?: boolean
 ): Ball {
   const angleRad = (angleDeg * Math.PI) / 180;
   const maxPower = club ? club.maxPower : 14;
   const speed = power * maxPower;
 
-  // Spin based on club spin factor — wedges impart heavy backspin, putter/driver very little
-  const spinFactor = club ? club.spinFactor : 0.5;
+  // Spin based on club spin factor — wedges impart heavy backspin, woods very little
+  // No spin out of sand — the sand kills all spin
+  const spinFactor = inSand ? 0 : (club ? club.spinFactor : 0.5);
   const angleFactor = (angleDeg - 10) / 80;
-  const spinAmount = angleFactor * power * 8 * spinFactor;
+  const spinAmount = angleFactor * power * 10 * spinFactor;
 
   return {
     ...ball,
@@ -155,9 +157,11 @@ export function stepPhysics(
     const segment = getSegmentAt(segments, x);
 
     // Check hole proximity — ball must be slow enough to drop in
+    // Rolling putts need to be much slower to sink; fast putts roll past
     const holeDist = Math.sqrt((x - holeX) ** 2 + (y - holeY) ** 2);
     const curSpeed = Math.sqrt(vx * vx + vy * vy);
-    if (holeDist < 18 && curSpeed < 10) {
+    const sinkSpeed = rolling ? 4 : 10;
+    if (holeDist < 18 && curSpeed < sinkSpeed) {
       return {
         ball: { ...ball, x: holeX, y: holeY, vx: 0, vy: 0, atRest: true, inFlight: false, rolling: false, spin: 0 },
         inHole: true,
@@ -208,7 +212,7 @@ export function stepPhysics(
         const impactSpeed = Math.sqrt(vx * vx + vy * vy);
         const normalComponent = Math.abs(dot) / (impactSpeed + 0.001);
         // normalComponent near 1 = head-on impact, near 0 = glancing
-        const baseCOR = segment.type === 'sand' ? 0.18 : BOUNCE_DAMPEN;
+        const baseCOR = segment.type === 'sand' ? 0.25 : BOUNCE_DAMPEN;
         // Glancing impacts keep more energy, head-on impacts lose more
         const cor = baseCOR * (1 - normalComponent * 0.3);
 
@@ -217,10 +221,17 @@ export function stepPhysics(
 
         // Backspin effect on bounce: reduces forward velocity on landing
         if (spin > 0.5) {
-          const spinBrake = Math.min(0.5, spin * 0.06);
+          // Moderate spin (short irons): strong braking, ball stops fast
+          // High spin (wedges): ball checks hard and can reverse direction
+          const spinBrake = Math.min(0.85, spin * 0.12);
           vx -= Math.sign(vx) * Math.abs(vx) * spinBrake;
+          // Very high spin can actually reverse the ball
+          if (spin > 3.0) {
+            const reversePower = (spin - 3.0) * 0.15;
+            vx -= Math.sign(vx) * reversePower;
+          }
           // Backspin also adds a bit of upward kick (ball checks up)
-          vy -= spin * 0.03;
+          vy -= spin * 0.04;
         }
         // Topspin effect: ball shoots forward and stays low
         if (spin < -0.5) {
@@ -229,12 +240,13 @@ export function stepPhysics(
         }
 
         // Bounce transfers some energy to spin change
-        spin *= 0.6; // big spin loss on bounce
+        // Low-spin clubs keep more forward energy, high-spin clubs lose more
+        spin *= 0.7;
 
         // Sand kills bounce significantly
         if (segment.type === 'sand') {
-          vx *= 0.5;
-          vy *= 0.3;
+          vx *= 0.65;
+          vy *= 0.45;
           inSand = true;
         }
 
@@ -261,17 +273,24 @@ export function stepPhysics(
         }
 
         // Surface friction — lower values = more friction = ball stops faster
-        const baseFriction = segment.type === 'green' ? 0.92
-          : segment.type === 'fringe' ? 0.88
+        // Putted balls (launchAngle ≤ 5) roll much more freely on green/fringe
+        const isPutt = ball.launchAngle <= 5;
+        const baseFriction = segment.type === 'green' ? (isPutt ? 0.985 : 0.92)
+          : segment.type === 'fringe' ? (isPutt ? 0.94 : 0.88)
           : segment.type === 'fairway' ? 0.83
           : segment.type === 'rough' ? 0.72
           : segment.type === 'sand' ? 0.50
           : 0.80;
 
         // Remaining backspin adds extra braking during roll
+        // High spin from wedges can reverse ball direction
         if (spin > 0.3) {
-          const spinBrake = 1 - Math.min(0.08, spin * 0.01);
+          const spinBrake = 1 - Math.min(0.35, spin * 0.06);
           vx *= spinBrake;
+          // High residual spin: actively pull ball backward
+          if (spin > 1.0) {
+            vx -= Math.sign(vx) * spin * 0.05;
+          }
         }
 
         vx *= Math.pow(baseFriction, dt);
