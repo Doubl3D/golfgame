@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import SetupScreen from '@/pages/SetupScreen';
 import GolfGame from '@/pages/GolfGame';
 import { MultiplayerConnection } from './game/multiplayer';
-import { Difficulty } from './game/terrain';
+import { Difficulty, PracticeType } from './game/terrain';
 
 type AppState =
   | { screen: 'setup' }
-  | { screen: 'game'; playerNames: string[]; totalHoles: number; difficulty: Difficulty; multiplayer?: MultiplayerConnection; joinCode?: string };
+  | { screen: 'game'; playerNames: string[]; totalHoles: number; difficulty: Difficulty; multiplayer?: MultiplayerConnection; joinCode?: string; practiceType?: PracticeType };
 
 function isMobile() {
   return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 1024);
@@ -103,6 +103,7 @@ export default function App() {
         difficulty={appState.difficulty}
         multiplayer={appState.multiplayer}
         joinCode={appState.joinCode}
+        practiceType={appState.practiceType}
         onBackToMenu={() => {
           appState.multiplayer?.disconnect();
           setAppState({ screen: 'setup' });
@@ -113,8 +114,8 @@ export default function App() {
 
   return (
     <SetupScreen
-      onStart={(playerNames, totalHoles, difficulty, multiplayer, joinCode) =>
-        setAppState({ screen: 'game', playerNames, totalHoles, difficulty, multiplayer, joinCode })
+      onStart={(playerNames, totalHoles, difficulty, multiplayer, joinCode, practiceType) =>
+        setAppState({ screen: 'game', playerNames, totalHoles, difficulty, multiplayer, joinCode, practiceType })
       }
     />
   );

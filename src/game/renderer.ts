@@ -403,16 +403,106 @@ export function drawTeeMarker(
   ctx: CanvasRenderingContext2D,
   teeX: number,
   teeY: number,
-  camera: Camera
+  camera: Camera,
+  holeNumber?: number,
+  par?: number,
+  showTee?: boolean,
+  distance?: number
 ) {
   const sx = teeX - camera.x;
-  ctx.beginPath();
-  ctx.rect(sx - 15, teeY - 4, 30, 4);
-  ctx.fillStyle = '#f9f9f9';
-  ctx.fill();
-  ctx.strokeStyle = '#ccc';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+
+  // Golf tee peg
+  if (showTee) {
+    ctx.fillStyle = '#d4a050';
+    // Tee stem
+    ctx.fillRect(sx - 1.5, teeY - 10, 3, 10);
+    // Tee cup
+    ctx.beginPath();
+    ctx.moveTo(sx - 5, teeY - 10);
+    ctx.lineTo(sx - 2, teeY - 7);
+    ctx.lineTo(sx + 2, teeY - 7);
+    ctx.lineTo(sx + 5, teeY - 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Draw hole sign to the left of the tee
+  if (holeNumber !== undefined && par !== undefined) {
+    const signX = sx - 40;
+    const postH = 45;
+    const signW = 42;
+    const signH = 38;
+
+    // Wooden post
+    ctx.fillStyle = '#8B6914';
+    ctx.fillRect(signX - 2, teeY - postH, 4, postH);
+
+    // Sign board
+    ctx.fillStyle = '#f5f0e0';
+    ctx.beginPath();
+    ctx.roundRect(signX - signW / 2, teeY - postH - signH + 2, signW, signH, 3);
+    ctx.fill();
+    ctx.strokeStyle = '#5a4a2a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Hole number
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${holeNumber}`, signX, teeY - postH - 22);
+
+    // Par
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#666';
+    ctx.fillText(`Par ${par}`, signX, teeY - postH - 12);
+
+    // Yardage
+    if (distance !== undefined) {
+      ctx.fillText(`${distance} yds`, signX, teeY - postH - 2);
+    }
+  }
+}
+
+export function drawPracticeYardageMarkers(
+  ctx: CanvasRenderingContext2D,
+  holeData: HoleData,
+  camera: Camera,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const { terrain, teeX } = holeData;
+  const pixelsPerYard = 6.5;
+  const s = uiScale(canvasHeight);
+
+  // Draw markers at 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300, etc.
+  for (let yds = 25; yds <= 500; yds += 25) {
+    const markerX = teeX + yds * pixelsPerYard;
+    if (markerX >= terrain.length) break;
+
+    const screenX = markerX - camera.x;
+    if (screenX < -20 || screenX > canvasWidth + 20) continue;
+
+    const terrainY = terrain[Math.min(Math.floor(markerX), terrain.length - 1)] ?? canvasHeight;
+
+    // Vertical marker line
+    const isMajor = yds % 50 === 0;
+    const lineH = isMajor ? 12 : 6;
+    ctx.strokeStyle = isMajor ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = isMajor ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(screenX, terrainY - lineH);
+    ctx.lineTo(screenX, terrainY);
+    ctx.stroke();
+
+    // Yardage text for major markers (every 50 yds)
+    if (isMajor) {
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = `bold ${Math.round(10 * s)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`${yds}`, screenX, terrainY - lineH - 4);
+    }
+  }
 }
 
 export function drawBall(

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { MultiplayerConnection, HostSession, createHostSession, joinSession } from '../game/multiplayer';
-import { Difficulty } from '../game/terrain';
+import { Difficulty, PracticeType } from '../game/terrain';
 
-type GameMode = 'menu' | 'local' | 'host' | 'join';
+type GameMode = 'menu' | 'local' | 'host' | 'join' | 'practice';
 
 interface SetupScreenProps {
-  onStart: (playerNames: string[], totalHoles: number, difficulty: Difficulty, multiplayer?: MultiplayerConnection, joinCode?: string) => void;
+  onStart: (playerNames: string[], totalHoles: number, difficulty: Difficulty, multiplayer?: MultiplayerConnection, joinCode?: string, practiceType?: PracticeType) => void;
 }
 
 function getStandardGamepad(): Gamepad | null {
@@ -46,6 +46,10 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
 
   const handleStart = () => {
     onStart([playerNames[0] || 'Player 1'], totalHoles, difficulty);
+  };
+
+  const handlePractice = (type: PracticeType) => {
+    onStart([playerNames[0] || 'Player 1'], 1, 'easy', undefined, undefined, type);
   };
 
   const updateName = (idx: number, name: string) => {
@@ -178,13 +182,14 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
         const right = dRight || stickRight;
 
         if (mode === 'menu') {
-          // Menu items: 0=Local, 1=Host, 2=Join
+          // Menu items: 0=Local, 1=Practice, 2=Host, 3=Join
           if (up) setFocusIdx(f => Math.max(0, f - 1));
-          if (down) setFocusIdx(f => Math.min(2, f + 1));
+          if (down) setFocusIdx(f => Math.min(3, f + 1));
           if (aBtn) {
             if (focusIdx === 0) setMode('local');
-            else if (focusIdx === 1) handleHost();
-            else if (focusIdx === 2) setMode('join');
+            else if (focusIdx === 1) setMode('practice');
+            else if (focusIdx === 2) handleHost();
+            else if (focusIdx === 3) setMode('join');
           }
         } else if (mode === 'local') {
           // Items: 0=holes, 1=difficulty, 2=start, 3=back
@@ -222,6 +227,18 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
           if (bBtn) { guestConnection?.disconnect(); setMode('menu'); setJoinInput(''); setJoinError(''); setWaitingForHost(false); }
           // A to join when code is 4 chars
           if (aBtn && joinInput.length === 4 && !waitingForHost) handleJoin();
+        } else if (mode === 'practice') {
+          // Items: 0=fairway, 1=rough, 2=sand, 3=putting, 4=back
+          if (up) setFocusIdx(f => Math.max(0, f - 1));
+          if (down) setFocusIdx(f => Math.min(4, f + 1));
+          if (aBtn) {
+            if (focusIdx === 0) handlePractice('fairway');
+            else if (focusIdx === 1) handlePractice('rough');
+            else if (focusIdx === 2) handlePractice('sand');
+            else if (focusIdx === 3) handlePractice('putting');
+            else if (focusIdx === 4) setMode('menu');
+          }
+          if (bBtn) setMode('menu');
         }
 
         gpPrevRef.current = gp.buttons.map(b => b.pressed);
@@ -539,6 +556,79 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
     );
   }
 
+  // ========== PRACTICE RANGE SCREEN ==========
+  if (mode === 'practice') {
+    const practiceOptions: { type: PracticeType; label: string; desc: string; color: string }[] = [
+      { type: 'fairway', label: 'Fairway', desc: 'Practice full shots from the fairway', color: '#2d8a2d' },
+      { type: 'rough', label: 'Rough', desc: 'Practice escaping the rough', color: '#1a5c1a' },
+      { type: 'sand', label: 'Sand', desc: 'Practice bunker shots', color: '#e8d5a3' },
+      { type: 'putting', label: 'Putting', desc: 'Practice putting on the green', color: '#50c050' },
+    ];
+
+    return (
+      <div
+        className="w-full flex flex-col items-center justify-center relative overflow-hidden"
+        style={{ background: 'linear-gradient(180deg, #1a6ba0 0%, #87ceeb 30%, #4ade80 60%, #2d8a2d 100%)', minHeight: '100dvh' }}
+      >
+        <svg className="absolute bottom-0 left-0 w-full" viewBox="0 0 1200 300" preserveAspectRatio="none" style={{ height: '40%' }}>
+          <path d="M0,200 Q200,100 400,180 Q600,260 800,150 Q1000,40 1200,160 L1200,300 L0,300 Z" fill="#2d8a2d" opacity="0.8" />
+          <path d="M0,230 Q150,150 350,210 Q550,280 750,190 Q950,100 1200,200 L1200,300 L0,300 Z" fill="#1a5c1a" />
+        </svg>
+
+        <div className={`relative z-10 flex flex-col items-center ${isSmall ? 'gap-2' : 'gap-4'} rounded-2xl`} style={cardStyle}>
+          <div style={{ fontSize: isSmall ? 20 : 28, fontWeight: 900, color: '#4ade80', fontFamily: 'monospace' }}>PRACTICE RANGE</div>
+          <div style={{ color: '#94a3b8', fontSize: isSmall ? 11 : 13, fontFamily: 'monospace', textAlign: 'center' }}>
+            What would you like to practice?
+          </div>
+
+          <div className="w-full flex flex-col gap-3">
+            {practiceOptions.map((opt, i) => (
+              <button
+                key={opt.type}
+                onClick={() => handlePractice(opt.type)}
+                style={{
+                  width: '100%',
+                  padding: isSmall ? '10px 16px' : '14px 20px',
+                  borderRadius: 10,
+                  border: `2px solid ${opt.color}`,
+                  background: focusIdx === i
+                    ? `linear-gradient(135deg, ${opt.color}44, ${opt.color}22)`
+                    : 'rgba(255,255,255,0.03)',
+                  color: '#fff',
+                  fontFamily: 'monospace',
+                  fontWeight: 'bold',
+                  fontSize: isSmall ? 14 : 18,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
+                  outline: focusIdx === i ? '3px solid #ffffff' : 'none',
+                  outlineOffset: 2,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <span>{opt.label}</span>
+                <span style={{ fontSize: isSmall ? 10 : 11, color: '#94a3b8', fontWeight: 'normal' }}>{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() => setMode('menu')}
+            style={{
+              color: focusIdx === 4 ? '#ffffff' : '#64748b', fontFamily: 'monospace', fontSize: 12,
+              background: 'none', border: 'none', cursor: 'pointer', marginTop: 8,
+              outline: focusIdx === 4 ? '2px solid rgba(255,255,255,0.5)' : 'none', outlineOffset: 2, borderRadius: 4,
+            }}
+          >
+            ← Back {focusIdx === 4 ? '(A)' : ''}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ========== LOCAL SETUP SCREEN ==========
   if (mode === 'local') {
     return (
@@ -661,13 +751,26 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
             LOCAL PLAY
           </button>
           <button
+            onClick={() => setMode('practice')}
+            style={{
+              ...bigBtnStyle,
+              background: 'linear-gradient(135deg, #1a5c1a, #2d8a2d)',
+              border: '2px solid #4ade80',
+              boxShadow: '0 0 20px rgba(74,222,128,0.3)',
+              outline: focusIdx === 1 ? '3px solid #ffffff' : 'none',
+              outlineOffset: 2,
+            }}
+          >
+            PRACTICE RANGE
+          </button>
+          <button
             onClick={handleHost}
             style={{
               ...bigBtnStyle,
               background: 'linear-gradient(135deg, #1e3a5f, #2563eb)',
               border: '2px solid #60a5fa',
               boxShadow: '0 0 20px rgba(96,165,250,0.3)',
-              outline: focusIdx === 1 ? '3px solid #ffffff' : 'none',
+              outline: focusIdx === 2 ? '3px solid #ffffff' : 'none',
               outlineOffset: 2,
             }}
           >
@@ -680,7 +783,7 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
               background: 'linear-gradient(135deg, #78350f, #d97706)',
               border: '2px solid #fbbf24',
               boxShadow: '0 0 20px rgba(251,191,36,0.3)',
-              outline: focusIdx === 2 ? '3px solid #ffffff' : 'none',
+              outline: focusIdx === 3 ? '3px solid #ffffff' : 'none',
               outlineOffset: 2,
             }}
           >

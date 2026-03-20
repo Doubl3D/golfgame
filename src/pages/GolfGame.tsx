@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { GameState, createInitialState, startHole, updateParticles, spawnSandParticles, spawnWaterParticles } from '../game/gameState';
 import { Ball, stepPhysics, launchBall, createBall } from '../game/physics';
-import { getSegmentAt, Difficulty, TerrainSegment } from '../game/terrain';
-import { CLUBS, suggestClub } from '../game/clubs';
-import { Camera, updateCamera, uiScale, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawWindIndicator, drawPowerMeter, drawYardageRuler, drawClubCarousel, getClubCarouselLayout, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls, setLastInputMode } from '../game/renderer';
+import { getSegmentAt, getTerrainY, Difficulty, TerrainSegment, PracticeType, generatePracticeRange } from '../game/terrain';
+import { CLUBS, suggestClub, getSandPowerCap } from '../game/clubs';
+import { Camera, updateCamera, uiScale, drawSky, drawForeground, drawTerrain, drawHoleFlag, drawTeeMarker, drawBall, drawBallMarker, drawAimArrow, drawParticles, drawHUD, drawWindIndicator, drawPowerMeter, drawYardageRuler, drawClubCarousel, getClubCarouselLayout, drawHoleIntro, drawScorecard, drawHoleSunk, drawGameOver, drawControls, setLastInputMode, drawPracticeYardageMarkers } from '../game/renderer';
 import { startAmbience, stopAmbience, playSwingSound, playPutterSound, playHoleSunkSound, playSandSound, playWaterSound, isMuted, toggleMute, areBirdsEnabled, toggleBirds } from '../game/audio';
 import { MultiplayerConnection, NetMessage, rejoinSession } from '../game/multiplayer';
 
@@ -13,10 +13,11 @@ interface GolfGameProps {
   difficulty: Difficulty;
   multiplayer?: MultiplayerConnection;
   joinCode?: string;
+  practiceType?: PracticeType;
   onBackToMenu: () => void;
 }
 
-export default function GolfGame({ playerNames, totalHoles, difficulty, multiplayer, joinCode, onBackToMenu }: GolfGameProps) {
+export default function GolfGame({ playerNames, totalHoles, difficulty, multiplayer, joinCode, practiceType, onBackToMenu }: GolfGameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<GameState>(createInitialState(playerNames, totalHoles, difficulty));
   const cameraRef = useRef<Camera>({ x: 0, y: 0 });
@@ -53,6 +54,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   const [menuOpen, setMenuOpen] = useState(false);
   const [muted, setMuted] = useState(isMuted());
   const [birdsOn, setBirdsOn] = useState(areBirdsEnabled());
+  const [windEnabled, setWindEnabled] = useState(true);
 
   const getCanvasSize = () => ({
     width: window.innerWidth,
@@ -107,7 +109,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
 
     const state = stateRef.current;
 
-    if (e.code === 'KeyF') {
+    if (e.code === 'KeyF' && !practiceType) {
       stateRef.current = { ...state, showScorecard: !state.showScorecard };
       return;
     }
@@ -174,6 +176,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   const mouseDownRef = useRef<{ x: number; y: number; backward: boolean } | null>(null);
   const mouseHeldRef = useRef(false);
   const rollingFramesRef = useRef(0);
+  const practiceLandingXRef = useRef<number | null>(null);
   const isTouchDevice = useRef(false);
 
   // Gamepad state
@@ -305,6 +308,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
   function doLaunch() {
     const s = stateRef.current;
     if (!s.ball || !s.holeData) return;
+    practiceLandingXRef.current = null;
     const club = CLUBS[s.selectedClubIndex];
     const launchSeg = getSegmentAt(s.holeData.segments, s.ball.x);
     const onSand = launchSeg.type === 'sand';
@@ -527,12 +531,35 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
     };
   }, [handleKeyDown, handleKeyUp]);
 
+  // Helper: set up practice range terrain
+  function startPracticeRound() {
+    const holeData = generatePracticeRange(practiceType!, window.innerHeight);
+    const ball = createBall(holeData.teeX, holeData.teeY - 10);
+    const sugIdx = practiceType === 'putting' ? CLUBS.length - 1 : 0; // putter for putting, driver for range
+    stateRef.current = {
+      ...stateRef.current,
+      phase: 'aiming',
+      holeData,
+      ball,
+      aimAngle: CLUBS[sugIdx].launchAngle,
+      selectedClubIndex: sugIdx,
+      currentStrokes: 0,
+      particles: [],
+      playerBalls: [ball],
+      playerStrokes: [0],
+      playerSunk: [false],
+    };
+    cameraRef.current = { x: 0, y: 0 };
+  }
+
   // Start first hole
   useEffect(() => {
     lastTimeRef.current = 0;
     accumRef.current = 0;
     if (joinCode) joinCodeRef.current = joinCode;
-    if (!isGuest) {
+    if (practiceType) {
+      startPracticeRound();
+    } else if (!isGuest) {
       stateRef.current = startHole(stateRef.current);
     }
     // Guest waits for hole-init from host
@@ -740,7 +767,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
           : null;
-        const POWER_CAP = ballSeg?.type === 'sand' ? 0.5 : ballSeg?.type === 'rough' ? 0.75 : 1.0;
+        const POWER_CAP = ballSeg?.type === 'sand' ? getSandPowerCap(state.selectedClubIndex) : ballSeg?.type === 'rough' ? 0.75 : 1.0;
         let newPower = state.power + POWER_SPEED * state.powerDirection;
         let newDir = state.powerDirection;
         if (newPower >= POWER_CAP) { newPower = POWER_CAP; newDir = -1; }
@@ -762,13 +789,18 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         } else {
           rollingFramesRef.current = 0;
         }
-        const autoFastForward = rollingFramesRef.current > 180;
         // In multiplayer, no manual fast-forward — both sides must step identically
         const simSpeed = isMultiplayer
-          ? (autoFastForward ? 6 : 1)
-          : ((mouseHeldRef.current || autoFastForward) ? 6 : 1);
+          ? 1
+          : (mouseHeldRef.current ? 6 : 1);
+        let prevInFlight = ball.inFlight;
         for (let step = 0; step < simSpeed; step++) {
           const result = stepPhysics(ball, holeData.terrain, holeData.segments, holeData.holeX, holeData.holeY, state.wind.speed * state.wind.direction);
+          // Track first landing position for practice range
+          if (practiceType && prevInFlight && result.bounced && practiceLandingXRef.current === null) {
+            practiceLandingXRef.current = result.ball.x;
+          }
+          prevInFlight = result.ball.inFlight;
           ball = result.ball;
 
           if (result.inHole) { inHole = true; break; }
@@ -857,7 +889,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
           updatedPlayerStrokes[state.currentPlayerIdx] = state.currentStrokes;
 
           stateRef.current = {
-            ...state, ball, phase: 'settled', settledTimer: 90, // ~1 second at 90fps
+            ...state, ball, phase: 'settled', settledTimer: practiceType ? (practiceType === 'putting' ? 135 : 270) : 90,
             particles: newParticles,
             playerBalls: updatedPlayerBalls, playerStrokes: updatedPlayerStrokes,
           };
@@ -880,6 +912,30 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         state = stateRef.current;
 
         if (state.settledTimer <= 0) {
+          // Practice mode: reset to tee
+          if (practiceType) {
+            if (practiceType === 'putting') {
+              // Putting: regenerate green for variety
+              startPracticeRound();
+            } else {
+              // Range: reset ball to tee, keep same terrain
+              const teeBall = createBall(holeData.teeX, holeData.teeY - 10);
+              const sugIdx = 0; // Driver
+              stateRef.current = {
+                ...state,
+                ball: teeBall,
+                phase: 'aiming',
+                selectedClubIndex: sugIdx,
+                aimAngle: CLUBS[sugIdx].launchAngle,
+                currentStrokes: 0,
+                particles: [],
+                playerBalls: [teeBall],
+                playerStrokes: [0],
+              };
+            }
+            state = stateRef.current;
+          } else {
+
           const ball = state.ball!;
 
           // Find next unsunk player (for multiplayer turn switch)
@@ -929,6 +985,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
           } else {
             transitionToAiming(ball);
           }
+        } // end else (non-practice)
         }
         state = stateRef.current;
       }
@@ -949,6 +1006,11 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       if (state.phase === 'holeSunk') {
         const newTimer = state.holeSunkTimer - 1;
         if (newTimer <= 0) {
+          // Practice mode: regenerate instead of scorecard
+          if (practiceType) {
+            startPracticeRound();
+            state = stateRef.current;
+          } else {
           const allSunk = state.playerSunk.every(s => s);
           if (allSunk || state.players.length === 1) {
             stateRef.current = { ...state, phase: 'scorecard', holeSunkTimer: 0 };
@@ -984,6 +1046,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
               state = stateRef.current;
             }
           }
+          } // end else (non-practice holeSunk)
         } else {
           stateRef.current = { ...state, holeSunkTimer: newTimer };
           state = stateRef.current;
@@ -1013,8 +1076,14 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       ctx.clearRect(0, 0, width, height);
       drawSky(ctx, width, height, cameraRef.current.x);
       drawTerrain(ctx, holeData, camera, width, height);
-      drawTeeMarker(ctx, holeData.teeX, holeData.teeY, camera);
-      drawHoleFlag(ctx, holeData.holeX, holeData.holeY, camera, frame);
+      const onTee = state.phase === 'aiming' && state.currentStrokes === 0;
+      drawTeeMarker(ctx, holeData.teeX, holeData.teeY, camera, practiceType ? undefined : state.currentHole, practiceType ? undefined : holeData.par, onTee, practiceType ? undefined : holeData.distance);
+      if (!practiceType || practiceType === 'putting') {
+        drawHoleFlag(ctx, holeData.holeX, holeData.holeY, camera, frame);
+      }
+      if (practiceType && practiceType !== 'putting') {
+        drawPracticeYardageMarkers(ctx, holeData, camera, width, height);
+      }
       drawParticles(ctx, state.particles, camera);
 
       // Draw other players' ball markers (before active ball so active is on top)
@@ -1035,6 +1104,77 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
           drawAimArrow(ctx, state.ball, state.aimAngle, camera);
         }
+        // Practice range: show air landing marker as soon as ball bounces, roll marker when settled
+        if (practiceType && practiceType !== 'putting' && (state.phase === 'inFlight' || state.phase === 'rolling' || state.phase === 'settled')) {
+          const pixelsPerYard = 6.5;
+          const s = uiScale(height);
+          const fontSize = Math.round(14 * s);
+          const px = Math.round(6 * s);
+          const py = Math.round(4 * s);
+          ctx.font = `bold ${fontSize}px monospace`;
+          ctx.textAlign = 'center';
+
+          const drawMarker = (screenX: number, screenY: number, label: string, color: string) => {
+            const tw = ctx.measureText(label).width;
+            const arrowH = Math.round(14 * s);
+            const arrowW = Math.round(10 * s);
+            const gap = Math.round(4 * s);
+            const boxH = fontSize + py * 2;
+            const boxTop = screenY - arrowH - gap - boxH;
+            const bx = screenX - tw / 2 - px;
+            // Label background
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.beginPath();
+            ctx.roundRect(bx, boxTop, tw + px * 2, boxH, Math.round(4 * s));
+            ctx.fill();
+            // Label text
+            ctx.fillStyle = color;
+            ctx.fillText(label, screenX, boxTop + fontSize + py);
+            // Arrow pointing down to the spot
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(screenX, screenY);
+            ctx.lineTo(screenX - arrowW, screenY - arrowH);
+            ctx.lineTo(screenX + arrowW, screenY - arrowH);
+            ctx.closePath();
+            ctx.fill();
+            // Arrow outline
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = Math.round(2.5 * s);
+            ctx.stroke();
+          };
+
+          // Air landing marker — show as soon as ball first bounces
+          let airMarkerSx: number | null = null;
+          let airMarkerY: number | null = null;
+          if (practiceLandingXRef.current !== null) {
+            const airYds = Math.round(Math.abs(practiceLandingXRef.current - holeData.teeX) / pixelsPerYard);
+            const landTerrainY = getTerrainY(holeData.terrain, practiceLandingXRef.current);
+            airMarkerSx = practiceLandingXRef.current - camera.x;
+            airMarkerY = landTerrainY;
+            drawMarker(airMarkerSx, airMarkerY, `${airYds}`, '#93c5fd');
+          }
+
+          // Total distance marker — only show when ball has settled
+          if (state.phase === 'settled') {
+            const totalYds = Math.round(Math.abs(state.ball.x - holeData.teeX) / pixelsPerYard);
+            const ballSx = state.ball.x - camera.x;
+            const rollYds = practiceLandingXRef.current !== null
+              ? Math.round(Math.abs(state.ball.x - practiceLandingXRef.current) / pixelsPerYard)
+              : 0;
+            const rolledBack = practiceLandingXRef.current !== null && state.ball.x < practiceLandingXRef.current;
+            const totalLabel = rollYds > 0 ? `${totalYds} (${rolledBack ? '-' : '+'}${rollYds})` : `${totalYds}`;
+            // Offset upward if too close to air marker
+            let rollMarkerY = state.ball.y;
+            if (airMarkerSx !== null && airMarkerY !== null) {
+              const dist = Math.abs(ballSx - airMarkerSx);
+              if (dist < Math.round(60 * s)) {
+                rollMarkerY = airMarkerY - Math.round(50 * s);
+              }
+            }
+            drawMarker(ballSx, rollMarkerY, totalLabel, '#fbbf24');
+          }
+        }
       }
 
       drawHUD(ctx, state, width, height);
@@ -1043,13 +1183,13 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       if ((state.phase === 'aiming' || state.phase === 'powering') && isMyTurn()) {
         drawClubCarousel(ctx, state.selectedClubIndex, width, height);
         drawWindIndicator(ctx, state, width, height);
-        if (state.ball && state.holeData) {
+        if (state.ball && state.holeData && (!practiceType || practiceType === 'putting')) {
           drawYardageRuler(ctx, state.ball, state.holeData, width, height, state.players[state.currentPlayerIdx]?.color);
         }
         const ballSeg = state.ball && state.holeData
           ? getSegmentAt(state.holeData.segments, state.ball.x)
           : null;
-        const renderPowerCap = ballSeg?.type === 'sand' ? 0.5 : ballSeg?.type === 'rough' ? 0.75 : 1.0;
+        const renderPowerCap = ballSeg?.type === 'sand' ? getSandPowerCap(state.selectedClubIndex) : ballSeg?.type === 'rough' ? 0.75 : 1.0;
         drawPowerMeter(ctx, state.power, state.phase === 'powering', width, height, renderPowerCap);
       }
 
@@ -1069,8 +1209,10 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
       }
 
       if ((state.phase === 'inFlight' || state.phase === 'rolling') && state.ball && state.holeData) {
-        drawYardageRuler(ctx, state.ball, state.holeData, width, height, state.players[state.currentPlayerIdx]?.color);
-        if (mouseHeldRef.current || rollingFramesRef.current > 180) {
+        if (!practiceType || practiceType === 'putting') {
+          drawYardageRuler(ctx, state.ball, state.holeData, width, height, state.players[state.currentPlayerIdx]?.color);
+        }
+        if (mouseHeldRef.current) {
           const s = uiScale(height);
           ctx.fillStyle = 'rgba(0,0,0,0.5)';
           ctx.fillRect(width / 2 - Math.round(40*s), height - Math.round(32*s), Math.round(80*s), Math.round(20*s));
@@ -1081,7 +1223,7 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         }
       }
 
-      if (state.phase === 'holeIntro') {
+      if (state.phase === 'holeIntro' && !practiceType) {
         const totalIntroTicks = 270;
         const introProgress = 1 - (state.holeIntroTimer / totalIntroTicks);
         const alpha = Math.min(1, state.holeIntroTimer > 30 ? 1 : state.holeIntroTimer / 30);
@@ -1092,7 +1234,25 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
         drawHoleSunk(ctx, state, width, height);
       }
 
-      if (state.showScorecard || state.phase === 'scorecard') {
+      // Practice mode label
+      if (practiceType) {
+        const s = uiScale(height);
+        const labels: Record<PracticeType, string> = {
+          fairway: 'DRIVING RANGE',
+          rough: 'ROUGH PRACTICE',
+          sand: 'BUNKER PRACTICE',
+          putting: 'PUTTING GREEN',
+        };
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        const labelW = Math.round(160 * s);
+        ctx.fillRect(width / 2 - labelW / 2, Math.round(8 * s), labelW, Math.round(24 * s));
+        ctx.fillStyle = '#4ade80';
+        ctx.font = `bold ${Math.round(12 * s)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillText(labels[practiceType], width / 2, Math.round(24 * s));
+      }
+
+      if (!practiceType && (state.showScorecard || state.phase === 'scorecard')) {
         drawScorecard(ctx, state, width, height);
         if (state.phase === 'scorecard') {
           const s = uiScale(height);
@@ -1233,15 +1393,31 @@ export default function GolfGame({ playerNames, totalHoles, difficulty, multipla
           >
             {birdsOn ? 'Birds: ON' : 'Birds: OFF'}
           </button>
-          <button
-            onClick={() => {
-              stateRef.current = { ...stateRef.current, showScorecard: !stateRef.current.showScorecard };
-              setMenuOpen(false);
-            }}
-            className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
-          >
-            Scorecard
-          </button>
+          {practiceType && (
+            <button
+              onClick={() => {
+                const nowEnabled = !windEnabled;
+                setWindEnabled(nowEnabled);
+                if (!nowEnabled) {
+                  stateRef.current = { ...stateRef.current, wind: { speed: 0, direction: 0, label: 'Calm' } };
+                }
+              }}
+              className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
+            >
+              {windEnabled ? 'Wind: ON' : 'Wind: OFF'}
+            </button>
+          )}
+          {!practiceType && (
+            <button
+              onClick={() => {
+                stateRef.current = { ...stateRef.current, showScorecard: !stateRef.current.showScorecard };
+                setMenuOpen(false);
+              }}
+              className="text-left text-sm text-white/90 hover:text-white px-3 py-2 rounded hover:bg-white/10"
+            >
+              Scorecard
+            </button>
+          )}
           <div className="border-t border-white/10 my-1" />
           <button
             onClick={() => {

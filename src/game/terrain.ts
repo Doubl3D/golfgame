@@ -174,11 +174,25 @@ export function generateHole(holeNumber: number, screenHeight?: number, difficul
   // Build segments from hazards
   const segments: TerrainSegment[] = [];
 
-  // Starting rough
+  // Starting rough with fringe tee box
+  const teeFringeStart = Math.max(0, teeX - 50);
+  const teeFringeEnd = Math.min(fairwayStart, teeX + 50);
+  if (teeFringeStart > 0) {
+    segments.push({
+      type: 'rough', startX: 0, endX: teeFringeStart,
+      color: '#1a5c1a', friction: 0.85, label: 'Rough',
+    });
+  }
   segments.push({
-    type: 'rough', startX: 0, endX: fairwayStart,
-    color: '#1a5c1a', friction: 0.85, label: 'Rough',
+    type: 'fringe', startX: teeFringeStart, endX: teeFringeEnd,
+    color: '#3da03d', friction: 1.05, label: 'Fringe',
   });
+  if (teeFringeEnd < fairwayStart) {
+    segments.push({
+      type: 'rough', startX: teeFringeEnd, endX: fairwayStart,
+      color: '#1a5c1a', friction: 0.85, label: 'Rough',
+    });
+  }
 
   // Fill fairway between hazards
   let cursor = fairwayStart;
@@ -302,6 +316,108 @@ export function getSegmentAt(segments: TerrainSegment[], x: number): TerrainSegm
     if (x >= seg.startX && x <= seg.endX) return seg;
   }
   return segments[0];
+}
+
+export type PracticeType = 'fairway' | 'rough' | 'sand' | 'putting';
+
+export function generatePracticeRange(practiceType: PracticeType, screenHeight?: number): HoleData {
+  const h = screenHeight || window.innerHeight;
+  const baseY = Math.round(h * 0.70);
+
+  if (practiceType === 'putting') {
+    // Putting green: shorter, flat green with a hole, regenerates each putt
+    const totalWidth = 800;
+    const terrain: number[] = [];
+
+    // Slight random undulation on the green
+    const seed = Math.random() * 1000;
+    for (let i = 0; i <= totalWidth; i++) {
+      const gentle = Math.sin(i * 0.008 + seed) * 3 + Math.sin(i * 0.02 + seed * 1.3) * 1.5;
+      terrain.push(baseY + gentle);
+    }
+
+    // Flatten tee area
+    const teeX = 100;
+    for (let i = Math.max(0, teeX - 40); i < Math.min(terrain.length, teeX + 40); i++) {
+      const t = Math.abs(i - teeX) / 40;
+      terrain[i] = terrain[i] * t + terrain[teeX] * (1 - t);
+    }
+
+    // Place hole at random distance 20-80 yards away
+    const holeX = teeX + 130 + Math.floor(Math.random() * 390); // ~20-80 yds
+    // Flatten hole area
+    for (let i = Math.max(0, holeX - 30); i < Math.min(terrain.length, holeX + 30); i++) {
+      const t = Math.abs(i - holeX) / 30;
+      terrain[i] = terrain[i] * t + terrain[holeX] * (1 - t);
+    }
+
+    const teeY = terrain[teeX];
+    const holeY = terrain[holeX];
+    const pixelsPerYard = 6.5;
+    const distance = Math.round(Math.abs(holeX - teeX) / pixelsPerYard);
+
+    const segments: TerrainSegment[] = [
+      { type: 'fringe', startX: 0, endX: 60, color: '#3da03d', friction: 1.05, label: 'Fringe' },
+      { type: 'green', startX: 60, endX: totalWidth, color: '#50c050', friction: 1.1, label: 'Green' },
+    ];
+
+    return { terrain, segments, teeX, teeY, holeX, holeY, par: 1, distance, width: totalWidth };
+  }
+
+  // Fairway / Rough / Sand practice range
+  const totalWidth = 4000;
+  const terrain: number[] = [];
+
+  // Flat terrain
+  for (let i = 0; i <= totalWidth; i++) {
+    terrain.push(baseY);
+  }
+
+  const teeX = 150;
+  const teeY = baseY;
+  const holeX = totalWidth - 200; // no real hole on a range
+  const holeY = baseY;
+  const pixelsPerYard = 6.5;
+
+  let teeSurfaceType: 'fairway' | 'rough' | 'sand' = 'fairway';
+  if (practiceType === 'rough') teeSurfaceType = 'rough';
+  if (practiceType === 'sand') teeSurfaceType = 'sand';
+
+  const segments: TerrainSegment[] = [];
+
+  // Tee area surface (first 250px around tee)
+  const teeEnd = teeX + 100;
+  if (teeSurfaceType === 'rough') {
+    segments.push({
+      type: 'rough', startX: 0, endX: teeEnd,
+      color: '#1a5c1a', friction: 0.85, label: 'Rough',
+    });
+  } else if (teeSurfaceType === 'sand') {
+    segments.push({
+      type: 'sand', startX: 0, endX: teeEnd,
+      color: '#e8d5a3', friction: 0.5, label: 'Sand',
+    });
+  } else {
+    segments.push({
+      type: 'fairway', startX: 0, endX: teeEnd,
+      color: '#2d8a2d', friction: 0.87, label: 'Fairway',
+    });
+  }
+
+  // First 100 yards is green (for wedge spin practice), rest is fairway
+  const greenEnd = teeEnd + Math.round(100 * pixelsPerYard);
+  segments.push({
+    type: 'green', startX: teeEnd, endX: greenEnd,
+    color: '#50c050', friction: 1.1, label: 'Green',
+  });
+  segments.push({
+    type: 'fairway', startX: greenEnd, endX: totalWidth,
+    color: '#2d8a2d', friction: 0.87, label: 'Fairway',
+  });
+
+  const distance = Math.round((totalWidth - 300) / pixelsPerYard);
+
+  return { terrain, segments, teeX, teeY, holeX, holeY, par: 0, distance, width: totalWidth };
 }
 
 export function getTerrainSlope(terrain: number[], x: number): number {

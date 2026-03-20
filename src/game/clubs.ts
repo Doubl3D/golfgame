@@ -30,8 +30,15 @@ export const CLUBS: Club[] = [
   { name: 'Sand Wedge',     shortName: 'SW', maxRange: 70,  launchAngle: 56, maxPower: 11.3, spinFactor: 1.40, icon: '🔶' },
 
   // Putter
-  { name: 'Putter',     shortName: 'Pt',  maxRange: 50,  launchAngle: 3,   maxPower: 9,    spinFactor: 0.0, icon: '🏒' },
+  { name: 'Putter',     shortName: 'Pt',  maxRange: 50,  launchAngle: 3,   maxPower: 16,   spinFactor: 0.0, icon: '🏒' },
 ];
+
+/** Power cap when hitting from sand — woods 25%, irons 50%, wedges 85% */
+export function getSandPowerCap(clubIndex: number): number {
+  if (clubIndex <= 2) return 0.25;  // Woods (Driver, 3W, 5W)
+  if (clubIndex <= 9) return 0.50;  // Irons (3i–9i)
+  return 0.85;                       // Wedges (PW, SW)
+}
 
 export function getClubIndex(name: string): number {
   return CLUBS.findIndex(c => c.name === name);
